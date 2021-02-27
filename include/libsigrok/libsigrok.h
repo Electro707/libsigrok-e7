@@ -97,6 +97,29 @@ enum sr_valid_code {
 
 #define SR_HZ_TO_NS(n) (UINT64_C(1000000000) / (n))
 
+#define SR_NS(n)   (n)
+#define SR_US(n)   ((n) * (uint64_t)(1000ULL))
+#define SR_MS(n)   ((n) * (uint64_t)(1000000ULL))
+#define SR_SEC(n)  ((n) * (uint64_t)(1000000000ULL))
+#define SR_MIN(n)  ((n) * (uint64_t)(60000000000ULL))
+#define SR_HOUR(n) ((n) * (uint64_t)(3600000000000ULL))
+#define SR_DAY(n)  ((n) * (uint64_t)(86400000000000ULL))
+
+#define SR_n(n)  (n)
+#define SR_Kn(n) ((n) * (uint64_t)(1000ULL))
+#define SR_Mn(n) ((n) * (uint64_t)(1000000ULL))
+#define SR_Gn(n) ((n) * (uint64_t)(1000000000ULL))
+
+#define SR_B(n)  (n)
+#define SR_KB(n) ((n) * (uint64_t)(1024ULL))
+#define SR_MB(n) ((n) * (uint64_t)(1048576ULL))
+#define SR_GB(n) ((n) * (uint64_t)(1073741824ULL))
+
+#define SR_mV(n) (n)
+#define SR_V(n)  ((n) * (uint64_t)(1000ULL))
+#define SR_KV(n) ((n) * (uint64_t)(1000000ULL))
+#define SR_MV(n) ((n) * (uint64_t)(1000000000ULL))
+
 /** libsigrok loglevels. */
 enum sr_loglevel {
 	SR_LOG_NONE = 0, /**< Output no messages at all. */

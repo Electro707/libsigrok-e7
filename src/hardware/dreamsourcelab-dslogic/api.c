@@ -23,28 +23,237 @@
 #include "protocol.h"
 
 static const struct dslogic_profile supported_device[] = {
-	/* DreamSourceLab DSLogic */
-	{ 0x2a0e, 0x0001, "DreamSourceLab", "DSLogic", NULL,
-		"dreamsourcelab-dslogic-fx2.fw",
-		0, "DreamSourceLab", "DSLogic", 256 * 1024 * 1024},
-	/* DreamSourceLab DSCope */
-	{ 0x2a0e, 0x0002, "DreamSourceLab", "DSCope", NULL,
-		"dreamsourcelab-dscope-fx2.fw",
-		0, "DreamSourceLab", "DSCope", 256 * 1024 * 1024},
-	/* DreamSourceLab DSLogic Pro */
-	{ 0x2a0e, 0x0003, "DreamSourceLab", "DSLogic Pro", NULL,
-		"dreamsourcelab-dslogic-pro-fx2.fw",
-		0, "DreamSourceLab", "DSLogic", 256 * 1024 * 1024},
-	/* DreamSourceLab DSLogic Plus */
-	{ 0x2a0e, 0x0020, "DreamSourceLab", "DSLogic Plus", NULL,
-		"dreamsourcelab-dslogic-plus-fx2.fw",
-		0, "DreamSourceLab", "DSLogic", 256 * 1024 * 1024},
-	/* DreamSourceLab DSLogic Basic */
-	{ 0x2a0e, 0x0021, "DreamSourceLab", "DSLogic Basic", NULL,
-		"dreamsourcelab-dslogic-basic-fx2.fw",
-		0, "DreamSourceLab", "DSLogic", 256 * 1024},
+    /*
+     * DSLogic
+     */
+    {0x2A0E, 0x0001, LIBUSB_SPEED_HIGH, "DreamSourceLab", "DSLogic", NULL,
+     "dreamsourcelab-dslogic-fx2.fw",
+     {CAPS_MODE_LOGIC,
+      CAPS_FEATURE_SEEP | CAPS_FEATURE_BUF,
+      (1 << DSL_STREAM20x16) | (1 << DSL_STREAM25x12) | (1 << DSL_STREAM50x6) | (1 << DSL_STREAM100x3) |
+      (1 << DSL_BUFFER100x16) | (1 << DSL_BUFFER200x8) | (1 << DSL_BUFFER400x4) |
+      (1 << DSL_ANALOG10x2) |
+      (1 << DSL_DSO200x2),
+      16,
+      SR_MB(256),
+      SR_Mn(2),
+      DSL_BUFFER100x16,
+      vdivs10to2000,
+      samplerates400,
+      0,
+      DSL_STREAM20x16,
+      SR_MHZ(1),
+      SR_Mn(1),
+      0,
+      0,
+      0,
+      0,
+      0,
+      SR_MHZ(200),
+      SR_MHZ(400)}
+    },
 
-	ALL_ZERO
+    {0x2A0E, 0x0003, LIBUSB_SPEED_HIGH, "DreamSourceLab", "DSLogic Pro", NULL,
+     "dreamsourcelab-dslogic-pro-fx2.fw",
+     {CAPS_MODE_LOGIC,
+      CAPS_FEATURE_SEEP | CAPS_FEATURE_VTH | CAPS_FEATURE_BUF,
+      (1 << DSL_STREAM20x16) | (1 << DSL_STREAM25x12) | (1 << DSL_STREAM50x6) | (1 << DSL_STREAM100x3) |
+      (1 << DSL_BUFFER100x16) | (1 << DSL_BUFFER200x8) | (1 << DSL_BUFFER400x4),
+      16,
+      SR_MB(256),
+      0,
+      DSL_BUFFER100x16,
+      0,
+      samplerates400,
+      0,
+      DSL_STREAM20x16,
+      SR_MHZ(1),
+      SR_Mn(1),
+      0,
+      0,
+      0,
+      0,
+      0,
+      SR_MHZ(200),
+      SR_MHZ(400)}
+    },
+
+    {0x2A0E, 0x0020, LIBUSB_SPEED_HIGH, "DreamSourceLab", "DSLogic PLus", NULL,
+     "dreamsourcelab-dslogic-plus-fx2.fw",
+     {CAPS_MODE_LOGIC,
+      CAPS_FEATURE_VTH | CAPS_FEATURE_BUF,
+      (1 << DSL_STREAM20x16) | (1 << DSL_STREAM25x12) | (1 << DSL_STREAM50x6) | (1 << DSL_STREAM100x3) |
+      (1 << DSL_BUFFER100x16) | (1 << DSL_BUFFER200x8) | (1 << DSL_BUFFER400x4),
+      16,
+      SR_MB(256),
+      0,
+      DSL_BUFFER100x16,
+      0,
+      samplerates400,
+      0,
+      DSL_STREAM20x16,
+      SR_MHZ(1),
+      SR_Mn(1),
+      0,
+      0,
+      0,
+      0,
+      0,
+      SR_MHZ(200),
+      SR_MHZ(400)}
+    },
+
+    {0x2A0E, 0x0021, LIBUSB_SPEED_HIGH, "DreamSourceLab", "DSLogic Basic", NULL,
+     "dreamsourcelab-dslogic-basic-fx2.fw",
+     {CAPS_MODE_LOGIC,
+      CAPS_FEATURE_VTH,
+      (1 << DSL_STREAM20x16) | (1 << DSL_STREAM25x12) | (1 << DSL_STREAM50x6) | (1 << DSL_STREAM100x3) |
+      (1 << DSL_BUFFER100x16) | (1 << DSL_BUFFER200x8) | (1 << DSL_BUFFER400x4),
+      16,
+      SR_KB(256),
+      0,
+      DSL_STREAM20x16,
+      0,
+      samplerates400,
+      0,
+      DSL_STREAM20x16,
+      SR_MHZ(1),
+      SR_Mn(1),
+      0,
+      0,
+      0,
+      0,
+      0,
+      SR_MHZ(200),
+      SR_MHZ(400)}
+    },
+
+    {0x2A0E, 0x0029, LIBUSB_SPEED_HIGH, "DreamSourceLab", "DSLogic U2Basic", NULL,
+     "dreamsourcelab-dslogic-u2basic-fx2.fw",
+     {CAPS_MODE_LOGIC,
+      CAPS_FEATURE_VTH | CAPS_FEATURE_BUF,
+      (1 << DSL_STREAM20x16) | (1 << DSL_STREAM25x12) | (1 << DSL_STREAM50x6) | (1 << DSL_STREAM100x3) |
+      (1 << DSL_BUFFER100x16),
+      16,
+      SR_MB(64),
+      0,
+      DSL_BUFFER100x16,
+      0,
+      samplerates100,
+      0,
+      DSL_STREAM20x16,
+      SR_MHZ(1),
+      SR_Mn(1),
+      0,
+      0,
+      0,
+      0,
+      0,
+      SR_MHZ(200),
+      SR_MHZ(400)}
+    },
+
+    {0x2A0E, 0x002A, LIBUSB_SPEED_HIGH, "DreamSourceLab", "DSLogic U3Pro16", NULL,
+     "dreamsourcelab-dslogic-u3pro16-fx3.fw",
+     {CAPS_MODE_LOGIC,
+      CAPS_FEATURE_VTH | CAPS_FEATURE_BUF | CAPS_FEATURE_USB30  | CAPS_FEATURE_ADF4360,
+      (1 << DSL_STREAM20x16_3DN2) | (1 << DSL_STREAM25x12_3DN2) | (1 << DSL_STREAM50x6_3DN2) | (1 << DSL_STREAM100x3_3DN2) |
+      (1 << DSL_BUFFER500x16) | (1 << DSL_BUFFER1000x8),
+      16,
+      SR_GB(2),
+      0,
+      DSL_BUFFER500x16,
+      0,
+      samplerates1000,
+      0,
+      DSL_STREAM20x16_3DN2,
+      SR_MHZ(1),
+      SR_Mn(1),
+      0,
+      0,
+      0,
+      0,
+      0,
+      SR_MHZ(500),
+      SR_GHZ(1)}
+    },
+
+    {0x2A0E, 0x002A, LIBUSB_SPEED_SUPER, "DreamSourceLab", "DSLogic U3Pro16", NULL,
+     "dreamsourcelab-dslogic-u3pro16-fx3.fw",
+     {CAPS_MODE_LOGIC,
+      CAPS_FEATURE_VTH | CAPS_FEATURE_BUF | CAPS_FEATURE_USB30 | CAPS_FEATURE_ADF4360,
+      (1 << DSL_STREAM125x16_16) | (1 << DSL_STREAM250x12_16) | (1 << DSL_STREAM500x6) | (1 << DSL_STREAM1000x3) |
+      (1 << DSL_BUFFER500x16) | (1 << DSL_BUFFER1000x8),
+      16,
+      SR_GB(2),
+      0,
+      DSL_BUFFER500x16,
+      0,
+      samplerates1000,
+      0,
+      DSL_STREAM125x16_16,
+      SR_MHZ(1),
+      SR_Mn(1),
+      0,
+      0,
+      0,
+      0,
+      0,
+      SR_MHZ(500),
+      SR_GHZ(1)}
+    },
+
+    {0x2A0E, 0x002C, LIBUSB_SPEED_HIGH, "DreamSourceLab", "DSLogic U3Pro32", NULL,
+     "dreamsourcelab-dslogic-u3pro32-fx3.fw",
+     {CAPS_MODE_LOGIC,
+      CAPS_FEATURE_VTH | CAPS_FEATURE_BUF | CAPS_FEATURE_USB30  | CAPS_FEATURE_ADF4360 | CAPS_FEATURE_LA_CH32,
+      (1 << DSL_STREAM10x32_32_3DN2) | (1 << DSL_STREAM20x16_32_3DN2) | (1 << DSL_STREAM25x12_32_3DN2) | (1 << DSL_STREAM50x6_32_3DN2) | (1 << DSL_STREAM100x3_32_3DN2) |
+      (1 << DSL_BUFFER500x16) | (1 << DSL_BUFFER1000x8),
+      32,
+      SR_GB(2),
+      0,
+      DSL_BUFFER250x32,
+      0,
+      samplerates1000,
+      0,
+      DSL_STREAM10x32_32_3DN2,
+      SR_MHZ(1),
+      SR_Mn(1),
+      0,
+      0,
+      0,
+      0,
+      0,
+      SR_MHZ(500),
+      SR_GHZ(1)}
+    },
+
+    {0x2A0E, 0x002C, LIBUSB_SPEED_SUPER, "DreamSourceLab", "DSLogic U3Pro32", NULL,
+     "dreamsourcelab-dslogic-u3pro32-fx3.fw",
+     {CAPS_MODE_LOGIC,
+      CAPS_FEATURE_VTH | CAPS_FEATURE_BUF | CAPS_FEATURE_USB30 | CAPS_FEATURE_ADF4360 | CAPS_FEATURE_LA_CH32,
+      (1 << DSL_STREAM50x32) | (1 << DSL_STREAM100x30) | (1 << DSL_STREAM250x12) | (1 << DSL_STREAM500x6) | (1 << DSL_STREAM1000x3) |
+      (1 << DSL_BUFFER250x32) | (1 << DSL_BUFFER500x16) | (1 << DSL_BUFFER1000x8),
+      32,
+      SR_GB(2),
+      0,
+      DSL_BUFFER250x32,
+      0,
+      samplerates1000,
+      0,
+      DSL_STREAM50x32,
+      SR_MHZ(1),
+      SR_Mn(1),
+      0,
+      0,
+      0,
+      0,
+      0,
+      SR_MHZ(500),
+      SR_GHZ(1)}
+    },
+
+    { 0, 0, LIBUSB_SPEED_UNKNOWN, 0, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}
 };
 
 static const uint32_t scanopts[] = {
@@ -137,6 +346,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	const char *conn;
 	char manufacturer[64], product[64], serial_num[64], connection_id[64];
 	char channel_name[16];
+    enum libusb_speed usb_speed;
 
 	drvc = di->context;
 
@@ -176,6 +386,11 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 
 		if (!is_plausible(&des))
 			continue;
+        
+        usb_speed = libusb_get_device_speed( devlist[i]);
+        if ((usb_speed != LIBUSB_SPEED_HIGH) &&
+            (usb_speed != LIBUSB_SPEED_SUPER))
+            continue;
 
 		if ((ret = libusb_open(devlist[i], &hdl)) < 0) {
 			sr_warn("Failed to open potential device with "
@@ -222,7 +437,8 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		prof = NULL;
 		for (j = 0; supported_device[j].vid; j++) {
 			if (des.idVendor == supported_device[j].vid &&
-					des.idProduct == supported_device[j].pid) {
+                des.idProduct == supported_device[j].pid &&
+                usb_speed == supported_device[j].usb_speed) {
 				prof = &supported_device[j];
 				break;
 			}
@@ -257,7 +473,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 
 		devc->samplerates = samplerates;
 		devc->num_samplerates = ARRAY_SIZE(samplerates);
-		has_firmware = usb_match_manuf_prod(devlist[i], "DreamSourceLab", "USB-based Instrument");
+		has_firmware = usb_match_manuf_prod(devlist[i], "DreamSourceLab", "USB-based DSL Instrument v2");
 
 		if (has_firmware) {
 			/* Already has the firmware, so fix the new address. */
@@ -306,24 +522,7 @@ static int dev_open(struct sr_dev_inst *sdi)
 	 */
 	ret = SR_ERR;
 	if (devc->fw_updated > 0) {
-		sr_info("Waiting for device to reset.");
-		/* Takes >= 300ms for the FX2 to be gone from the USB bus. */
-		g_usleep(300 * 1000);
-		timediff_ms = 0;
-		while (timediff_ms < MAX_RENUM_DELAY_MS) {
-			if ((ret = dslogic_dev_open(sdi, di)) == SR_OK)
-				break;
-			g_usleep(100 * 1000);
-
-			timediff_us = g_get_monotonic_time() - devc->fw_updated;
-			timediff_ms = timediff_us / 1000;
-			sr_spew("Waited %" PRIi64 "ms.", timediff_ms);
-		}
-		if (ret != SR_OK) {
-			sr_err("Device failed to renumerate.");
-			return SR_ERR;
-		}
-		sr_info("Device came back after %" PRIi64 "ms.", timediff_ms);
+		return SR_ERR;
 	} else {
 		sr_info("Firmware upload was not needed.");
 		ret = dslogic_dev_open(sdi, di);

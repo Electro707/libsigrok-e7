@@ -23,6 +23,7 @@
 #include <stdbool.h>
 #include <glib.h>
 #include <glib/gstdio.h>
+#include <assert.h>
 #include "protocol.h"
 
 #define DS_CMD_GET_FW_VERSION		0xb0
@@ -86,6 +87,96 @@
 #define DS_CFG_TRIG			_DS_CFG(64, 160)
 #define DS_CFG_END			0xfa5afa5a
 
+//////////////////////////////////////////////////////////////////////
+// New stuff
+/* Protocol commands */
+#define CMD_CTL_WR              0xb0
+#define CMD_CTL_RD_PRE          0xb1
+#define CMD_CTL_RD              0xb2
+
+// read only
+#define bmGPIF_DONE     (1 << 7)
+#define bmFPGA_DONE     (1 << 6)
+#define bmFPGA_INIT_B   (1 << 5)
+// write only
+#define bmCH_CH0        (1 << 7)
+#define bmCH_COM        (1 << 6)
+#define bmCH_CH1        (1 << 5)
+// read/write
+#define bmSYS_OVERFLOW  (1 << 4)
+#define bmSYS_CLR       (1 << 3)
+#define bmSYS_EN        (1 << 2)
+#define bmLED_RED       (1 << 1)
+#define bmLED_GREEN     (1 << 0)
+
+#define bmWR_PROG_B        (1 << 2)
+#define bmWR_INTRDY        (1 << 7)
+#define bmWR_WORDWIDE      (1 << 0)
+
+#define EI2C_CTR_OFF   0x2
+#define EI2C_RXR_OFF   0x3
+#define EI2C_SR_OFF    0x4
+#define EI2C_TXR_OFF   0x3
+#define EI2C_CR_OFF    0x4
+#define EI2C_SEL_OFF   0x7
+
+#define bmEI2C_EN (1 << 7)
+
+#define bmEI2C_STA (1 << 7)
+#define bmEI2C_STO (1 << 6)
+#define bmEI2C_RD (1 << 5)
+#define bmEI2C_WR (1 << 4)
+#define bmEI2C_NACK (1 << 3)
+
+#define bmEI2C_RXNACK (1 << 7)
+#define bmEI2C_TIP (1 << 1)
+
+#define EI2C_AWR 0x82
+#define EI2C_ARD 0x83
+
+#define bmNONE          0
+#define bmEEWP          (1 << 0)
+#define bmFORCE_RDY     (1 << 1)
+#define bmFORCE_STOP    (1 << 2)
+#define bmSCOPE_SET     (1 << 3)
+#define bmSCOPE_CLR     (1 << 4)
+#define bmBW20M_SET     (1 << 5)
+#define bmBW20M_CLR     (1 << 6)
+
+enum {
+    DSL_CTL_FW_VERSION		= 0,
+    DSL_CTL_REVID_VERSION	= 1,
+    DSL_CTL_HW_STATUS		= 2,
+    DSL_CTL_PROG_B			= 3,
+    DSL_CTL_SYS				= 4,
+    DSL_CTL_LED				= 5,
+    DSL_CTL_INTRDY			= 6,
+    DSL_CTL_WORDWIDE		= 7,
+
+    DSL_CTL_START			= 8,
+    DSL_CTL_STOP			= 9,
+    DSL_CTL_BULK_WR			= 10,
+    DSL_CTL_REG				= 11,
+    DSL_CTL_NVM				= 12,
+
+    DSL_CTL_I2C_DSO			= 13,
+    DSL_CTL_I2C_REG			= 14,
+    DSL_CTL_I2C_STATUS		= 15,
+
+    DSL_CTL_DSO_EN0			= 16,
+    DSL_CTL_DSO_DC0			= 17,
+    DSL_CTL_DSO_ATT0		= 18,
+    DSL_CTL_DSO_EN1			= 19,
+    DSL_CTL_DSO_DC1			= 20,
+    DSL_CTL_DSO_ATT1		= 21,
+
+    DSL_CTL_AWG_WR			= 22,
+    DSL_CTL_I2C_PROBE		= 23,
+    DSL_CTL_I2C_EXT         = 24,
+};
+
+////////////////////////////////////
+
 #pragma pack(push, 1)
 
 struct version_info {
@@ -129,6 +220,19 @@ struct fpga_config {
 	uint32_t end_sync;
 };
 
+struct ctl_header {
+    uint8_t dest;
+    uint16_t offset;
+    uint8_t size;
+};
+struct ctl_wr_cmd {
+    struct ctl_header header;
+    uint8_t data[60];
+};
+struct ctl_rd_cmd {
+    struct ctl_header header;
+    uint8_t *data;
+};
 #pragma pack(pop)
 
 /*
@@ -142,40 +246,115 @@ struct fpga_config {
 
 #define USB_TIMEOUT (3 * 1000)
 
+static int command_ctl_wr(libusb_device_handle *devhdl, struct ctl_wr_cmd cmd)
+{
+    int ret;
+
+    /* Send the control command. */
+    ret = libusb_control_transfer(devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
+            LIBUSB_ENDPOINT_OUT, CMD_CTL_WR, 0x0000, 0x0000,
+            (unsigned char *)&cmd, cmd.header.size+sizeof(struct ctl_header), 3000);
+    if (ret < 0) {
+        sr_err("Unable to send CMD_CTL_WR command(dest:%d/offset:%d/size:%d): %s.",
+               cmd.header.dest, cmd.header.offset, cmd.header.size,
+               libusb_error_name(ret));
+        return SR_ERR;
+    }
+
+    return SR_OK;
+}
+
+static int command_ctl_rd(libusb_device_handle *devhdl, struct ctl_rd_cmd cmd)
+{
+    int ret;
+
+    /* Send the control message. */
+    ret = libusb_control_transfer(devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
+            LIBUSB_ENDPOINT_OUT, CMD_CTL_RD_PRE, 0x0000, 0x0000,
+            (unsigned char *)&cmd, sizeof(struct ctl_header), 3000);
+    if (ret < 0) {
+        sr_err("Unable to send CMD_CTL_RD_PRE command(dest:%d/offset:%d/size:%d): %s.",
+               cmd.header.dest, cmd.header.offset, cmd.header.size,
+               libusb_error_name(ret));
+        return SR_ERR;
+    }
+
+    g_usleep(10*1000);
+
+    /* Send the control message. */
+    ret = libusb_control_transfer(devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
+        LIBUSB_ENDPOINT_IN, CMD_CTL_RD, 0x0000, 0x0000,
+        (unsigned char *)cmd.data, cmd.header.size, 3000);
+
+    if (ret < 0) {
+        sr_err("Unable to send CMD_CTL_RD command: %s.",
+               libusb_error_name(ret));
+        return SR_ERR;
+    }
+
+    return SR_OK;
+}
+
+static int dslogic_wr_reg(const struct sr_dev_inst *sdi, uint8_t addr, uint8_t value)
+{
+    struct sr_usb_dev_inst *usb;
+    struct libusb_device_handle *hdl;
+    struct ctl_wr_cmd wr_cmd;
+    int ret;
+
+    usb = sdi->conn;
+    hdl = usb->devhdl;
+
+    wr_cmd.header.dest = DSL_CTL_I2C_REG;
+    wr_cmd.header.offset = addr;
+    wr_cmd.header.size = 1;
+    wr_cmd.data[0] = value;
+    if ((ret = command_ctl_wr(hdl, wr_cmd)) != SR_OK) {
+        sr_err("Sent DSL_CTL_I2C_REG command failed.");
+        return SR_ERR;
+    }
+
+    return SR_OK;
+}
+
+static int dslogic_rd_reg(const struct sr_dev_inst *sdi, uint8_t addr, uint8_t *value)
+{
+    struct sr_usb_dev_inst *usb;
+    struct ctl_rd_cmd rd_cmd;
+    int ret;
+
+    usb = sdi->conn;
+
+    rd_cmd.header.dest = DSL_CTL_I2C_STATUS;
+    rd_cmd.header.offset = addr;
+    rd_cmd.header.size = 1;
+    rd_cmd.data = value;
+    if ((ret = command_ctl_rd(usb->devhdl, rd_cmd)) != SR_OK) {
+        sr_err("Sent DSL_CTL_I2C_STATUS read command failed.");
+        return SR_ERR;
+    }
+
+    return SR_OK;
+}
+
+
 static int command_get_fw_version(libusb_device_handle *devhdl,
 				  struct version_info *vi)
 {
-	int ret;
-
-	ret = libusb_control_transfer(devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
-		LIBUSB_ENDPOINT_IN, DS_CMD_GET_FW_VERSION, 0x0000, 0x0000,
-		(unsigned char *)vi, sizeof(struct version_info), USB_TIMEOUT);
-
-	if (ret < 0) {
-		sr_err("Unable to get version info: %s.",
-		       libusb_error_name(ret));
-		return SR_ERR;
-	}
-
-	return SR_OK;
-}
-
-static int command_get_revid_version(struct sr_dev_inst *sdi, uint8_t *revid)
-{
-	struct sr_usb_dev_inst *usb = sdi->conn;
-	libusb_device_handle *devhdl = usb->devhdl;
-	int ret;
-
-	ret = libusb_control_transfer(devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
-		LIBUSB_ENDPOINT_IN, DS_CMD_GET_REVID_VERSION, 0x0000, 0x0000,
-		revid, 1, USB_TIMEOUT);
-
-	if (ret < 0) {
-		sr_err("Unable to get REVID: %s.", libusb_error_name(ret));
-		return SR_ERR;
-	}
-
-	return SR_OK;
+    struct ctl_rd_cmd rd_cmd;
+    uint8_t rd_cmd_data[2];
+    int ret;
+    
+    rd_cmd.header.dest = DSL_CTL_FW_VERSION;
+    rd_cmd.header.size = 2;
+    rd_cmd.data = rd_cmd_data;
+    if ((ret = command_ctl_rd(devhdl, rd_cmd)) != SR_OK) {
+        sr_err("Failed to get firmware version.");
+        return SR_ERR;
+    }
+    vi->major = rd_cmd_data[0];
+    vi->minor = rd_cmd_data[1];
+    return SR_OK;
 }
 
 static int command_start_acquisition(const struct sr_dev_inst *sdi)
@@ -202,20 +381,25 @@ static int command_start_acquisition(const struct sr_dev_inst *sdi)
 static int command_stop_acquisition(const struct sr_dev_inst *sdi)
 {
 	struct sr_usb_dev_inst *usb;
-	struct dslogic_mode mode;
+    struct ctl_wr_cmd wr_cmd;
+    struct dev_context *devc;
 	int ret;
 
-	mode.flags = DS_START_FLAGS_STOP;
-	mode.sample_delay_h = mode.sample_delay_l = 0;
+	devc = sdi->priv;
+    usb = sdi->conn;
 
-	usb = sdi->conn;
-	ret = libusb_control_transfer(usb->devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
-			LIBUSB_ENDPOINT_OUT, DS_CMD_START, 0x0000, 0x0000,
-			(unsigned char *)&mode, sizeof(struct dslogic_mode), USB_TIMEOUT);
-	if (ret < 0) {
-		sr_err("Failed to send stop command: %s.", libusb_error_name(ret));
-		return SR_ERR;
-	}
+    if (!devc->abort) {
+        devc->abort = TRUE;
+        dslogic_wr_reg(sdi, CTR0_ADDR, bmFORCE_RDY);
+    } else if (devc->status == DSL_FINISH) {
+        /* Stop GPIF acquisition */
+        wr_cmd.header.dest = DSL_CTL_STOP;
+        wr_cmd.header.size = 0;
+        if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK)
+            sr_err("%s: Sent acquisition stop command failed!", __func__);
+        else
+            sr_info("%s: Sent acquisition stop command!", __func__);
+    }
 
 	return SR_OK;
 }
@@ -223,16 +407,18 @@ static int command_stop_acquisition(const struct sr_dev_inst *sdi)
 SR_PRIV int dslogic_fpga_firmware_upload(const struct sr_dev_inst *sdi)
 {
 	const char *name = NULL;
-	uint64_t sum;
+	uint64_t sum, filesize;
 	struct sr_resource bitstream;
 	struct drv_context *drvc;
 	struct dev_context *devc;
 	struct sr_usb_dev_inst *usb;
+    struct ctl_wr_cmd wr_cmd;
+    struct ctl_rd_cmd rd_cmd;
 	unsigned char *buf;
 	ssize_t chunksize;
 	int transferred;
 	int result, ret;
-	const uint8_t cmd[3] = {0, 0, 0};
+    uint8_t rd_cmd_data;
 
 	drvc = sdi->driver->context;
 	devc = sdi->priv;
@@ -251,6 +437,8 @@ SR_PRIV int dslogic_fpga_firmware_upload(const struct sr_dev_inst *sdi)
 		name = DSLOGIC_BASIC_FPGA_FIRMWARE;
 	} else if (!strcmp(devc->profile->model, "DSCope")) {
 		name = DSCOPE_FPGA_FIRMWARE;
+    } else if (!strcmp(devc->profile->model, "DSLogic U3Pro16")) {
+        name = DSLOGIC_U3PRO16_FPGA_FIRMWARE;
 	} else {
 		sr_err("Failed to select FPGA firmware.");
 		return SR_ERR;
@@ -260,21 +448,73 @@ SR_PRIV int dslogic_fpga_firmware_upload(const struct sr_dev_inst *sdi)
 
 	result = sr_resource_open(drvc->sr_ctx, &bitstream,
 			SR_RESOURCE_FIRMWARE, name);
-	if (result != SR_OK)
+	if (result != SR_OK){
 		return result;
+    }
+    
+    filesize = (uint64_t)bitstream.size;
 
-	/* Tell the device firmware is coming. */
-	if ((ret = libusb_control_transfer(usb->devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
-			LIBUSB_ENDPOINT_OUT, DS_CMD_CONFIG, 0x0000, 0x0000,
-			(unsigned char *)&cmd, sizeof(cmd), USB_TIMEOUT)) < 0) {
-		sr_err("Failed to upload FPGA firmware: %s.", libusb_error_name(ret));
-		sr_resource_close(drvc->sr_ctx, &bitstream);
+	// step0: assert PROG_B low
+    wr_cmd.header.dest = DSL_CTL_PROG_B;
+    wr_cmd.header.size = 1;
+    wr_cmd.data[0] = ~bmWR_PROG_B;
+    if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK){
+        sr_resource_close(drvc->sr_ctx, &bitstream);
 		return SR_ERR;
-	}
+    }
 
-	/* Give the FX2 time to get ready for FPGA firmware upload. */
-	g_usleep(FPGA_UPLOAD_DELAY);
+	// step1: turn off GREEN/RED led
+    wr_cmd.header.dest = DSL_CTL_LED;
+    wr_cmd.header.size = 1;
+    wr_cmd.data[0] = ~bmLED_GREEN & ~bmLED_RED;
+    if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK){
+        sr_resource_close(drvc->sr_ctx, &bitstream);
+		return SR_ERR;
+    }
 
+	// step2: assert PORG_B high
+    wr_cmd.header.dest = DSL_CTL_PROG_B;
+    wr_cmd.header.size = 1;
+    wr_cmd.data[0] = bmWR_PROG_B;
+    if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK){
+        sr_resource_close(drvc->sr_ctx, &bitstream);
+		return SR_ERR;
+    }
+
+	// step3: wait INIT_B go high
+    rd_cmd.header.dest = DSL_CTL_HW_STATUS;
+    rd_cmd.header.size = 1;
+	rd_cmd_data = 0;
+    rd_cmd.data = &rd_cmd_data;
+    while(1) {
+        if ((ret = command_ctl_rd(usb->devhdl, rd_cmd)) != SR_OK){
+            sr_resource_close(drvc->sr_ctx, &bitstream);
+			return SR_ERR;
+        }
+        if (rd_cmd_data & bmFPGA_INIT_B)
+            break;
+    }
+
+	// step4: send config ctl command
+    wr_cmd.header.dest = DSL_CTL_INTRDY;
+    wr_cmd.header.size = 1;
+    wr_cmd.data[0] = (uint8_t)~bmWR_INTRDY;
+    if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK){
+        sr_resource_close(drvc->sr_ctx, &bitstream);
+        return SR_ERR;
+    }
+
+    wr_cmd.header.dest = DSL_CTL_BULK_WR;
+    wr_cmd.header.size = 3;
+    wr_cmd.data[0] = (uint8_t)filesize;
+    wr_cmd.data[1] = (uint8_t)(filesize >> 8);
+    wr_cmd.data[2] = (uint8_t)(filesize >> 16);
+    if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK) {
+        sr_err("Configure FPGA error: send command fpga_config failed.");
+        sr_resource_close(drvc->sr_ctx, &bitstream);
+		return SR_ERR;
+    }
+    
 	buf = g_malloc(FW_BUFSIZE);
 	sum = 0;
 	result = SR_OK;
@@ -309,7 +549,57 @@ SR_PRIV int dslogic_fpga_firmware_upload(const struct sr_dev_inst *sdi)
 	if (result == SR_OK)
 		sr_dbg("FPGA firmware upload done.");
 
-	return result;
+	// step6: assert INTRDY high (indicate data end)
+    wr_cmd.header.dest = DSL_CTL_INTRDY;
+    wr_cmd.header.size = 1;
+    wr_cmd.data[0] = bmWR_INTRDY;
+    if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK)
+		return SR_ERR;
+
+    // step7: check GPIF_DONE
+    rd_cmd.header.dest = DSL_CTL_HW_STATUS;
+    rd_cmd.header.size = 1;
+    rd_cmd_data = 0;
+    rd_cmd.data = &rd_cmd_data;
+    while ((ret = command_ctl_rd(usb->devhdl, rd_cmd)) == SR_OK) {
+        if (rd_cmd_data & bmGPIF_DONE) {
+            break;
+        }
+    }
+
+    // step8: assert INTRDY low
+    wr_cmd.header.dest = DSL_CTL_INTRDY;
+    wr_cmd.header.size = 1;
+    wr_cmd.data[0] = (uint8_t)~bmWR_INTRDY;
+    if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK)
+        return SR_ERR;
+
+    // step9: check FPGA_DONE bit
+    rd_cmd.header.dest = DSL_CTL_HW_STATUS;
+    rd_cmd.header.size = 1;
+	rd_cmd_data = 0;
+    rd_cmd.data = &rd_cmd_data;
+    while ((ret = command_ctl_rd(usb->devhdl, rd_cmd)) == SR_OK) {
+        if (rd_cmd_data & bmFPGA_DONE) {
+            // step10: turn on GREEN led
+            wr_cmd.header.dest = DSL_CTL_LED;
+            wr_cmd.data[0] = bmLED_GREEN;
+            if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) == SR_OK)
+                break;
+        }
+    }
+
+    // step10: recover GPIF to be wordwide
+    wr_cmd.header.dest = DSL_CTL_WORDWIDE;
+    wr_cmd.header.size = 1;
+    wr_cmd.data[0] = bmWR_WORDWIDE;
+    if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK) {
+        sr_err("Sent DSL_CTL_WORDWIDE command failed.");
+        return SR_ERR;
+    }
+
+    sr_dbg("FPGA configure done");
+    return SR_OK;
 }
 
 static unsigned int enabled_channel_count(const struct sr_dev_inst *sdi)
@@ -371,7 +661,8 @@ static bool set_trigger(const struct sr_dev_inst *sdi, struct fpga_config *cfg)
 	trigger_point = (devc->capture_ratio * devc->limit_samples) / 100;
 	if (trigger_point < DSLOGIC_ATOMIC_SAMPLES)
 		trigger_point = DSLOGIC_ATOMIC_SAMPLES;
-	const uint32_t mem_depth = devc->profile->mem_depth;
+// 	const uint32_t mem_depth = devc->profile->mem_depth;
+    const uint32_t mem_depth = devc->profile->dev_caps.dso_depth;
 	const uint32_t max_trigger_point = devc->continuous_mode ? ((mem_depth * 10) / 100) :
 		((mem_depth * DS_MAX_TRIG_PERCENT) / 100);
 	if (trigger_point > max_trigger_point)
@@ -511,24 +802,31 @@ static int fpga_configure(const struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
+SR_PRIV int dslogic_config_adc(const struct sr_dev_inst *sdi, const struct dslogic_adc_config *config)
+{
+    while(config->dest) {
+        assert((config->cnt > 0) && (config->cnt <= 4));
+        if (config->delay >0)
+            g_usleep(config->delay*1000);
+        for (int i = 0; i < config->cnt; i++) {
+            dslogic_wr_reg(sdi, config->dest, config->byte[i]);
+        }
+        config++;
+    }
+    return SR_OK;
+}
+
 SR_PRIV int dslogic_set_voltage_threshold(const struct sr_dev_inst *sdi, double threshold)
 {
 	int ret;
 	struct dev_context *const devc = sdi->priv;
 	const struct sr_usb_dev_inst *const usb = sdi->conn;
 	const uint8_t value = (threshold / 5.0) * 255;
-	const uint16_t cmd = value | (DS_ADDR_VTH << 8);
 
-	/* Send the control command. */
-	ret = libusb_control_transfer(usb->devhdl,
-			LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_ENDPOINT_OUT,
-			DS_CMD_WR_REG, 0x0000, 0x0000,
-			(unsigned char *)&cmd, sizeof(cmd), 3000);
-	if (ret < 0) {
-		sr_err("Unable to set voltage-threshold register: %s.",
-		libusb_error_name(ret));
-		return SR_ERR;
-	}
+	ret = dslogic_wr_reg(sdi, VTH_ADDR, value);
+    if (devc->profile->dev_caps.feature_caps & CAPS_FEATURE_ADF4360) {
+        dslogic_config_adc(sdi, adc_clk_init_500m);
+    }
 
 	devc->cur_threshold = threshold;
 
@@ -544,7 +842,7 @@ SR_PRIV int dslogic_dev_open(struct sr_dev_inst *sdi, struct sr_dev_driver *di)
 	struct drv_context *drvc;
 	struct version_info vi;
 	int ret = SR_ERR, i, device_count;
-	uint8_t revid;
+// 	uint8_t revid;
 	char connection_id[64];
 
 	drvc = di->context;
@@ -607,11 +905,11 @@ SR_PRIV int dslogic_dev_open(struct sr_dev_inst *sdi, struct sr_dev_driver *di)
 			break;
 		}
 
-		ret = command_get_revid_version(sdi, &revid);
-		if (ret != SR_OK) {
-			sr_err("Failed to get REVID.");
-			break;
-		}
+// 		ret = command_get_revid_version(sdi, &revid);
+// 		if (ret != SR_OK) {
+// 			sr_err("Failed to get REVID.");
+// 			break;
+// 		}
 
 		/*
 		 * Changes in major version mean incompatible/API changes, so
@@ -631,8 +929,8 @@ SR_PRIV int dslogic_dev_open(struct sr_dev_inst *sdi, struct sr_dev_driver *di)
 			usb->bus, usb->address, connection_id,
 			USB_INTERFACE, vi.major, vi.minor);
 
-		sr_info("Detected REVID=%d, it's a Cypress CY7C68013%s.",
-			revid, (revid != 1) ? " (FX2)" : "A (FX2LP)");
+// 		sr_info("Detected REVID=%d, it's a Cypress CY7C68013%s.",
+// 			revid, (revid != 1) ? " (FX2)" : "A (FX2LP)");
 
 		ret = SR_OK;
 
@@ -647,15 +945,49 @@ SR_PRIV int dslogic_dev_open(struct sr_dev_inst *sdi, struct sr_dev_driver *di)
 SR_PRIV struct dev_context *dslogic_dev_new(void)
 {
 	struct dev_context *devc;
+    unsigned int i;
 
 	devc = g_malloc0(sizeof(struct dev_context));
-	devc->profile = NULL;
+    
+    for (i = 0; i < ARRAY_SIZE(channel_modes); i++)
+        assert(channel_modes[i].id == i);
+	
+//     devc->channel = NULL;
+    devc->profile = NULL;
 	devc->fw_updated = 0;
-	devc->cur_samplerate = 0;
-	devc->limit_samples = 0;
-	devc->capture_ratio = 0;
-	devc->continuous_mode = FALSE;
-	devc->clock_edge = DS_EDGE_RISING;
+    devc->cur_samplerate = devc->profile->dev_caps.default_samplerate;
+    devc->limit_samples = devc->profile->dev_caps.default_samplelimit;
+//     devc->clock_type = FALSE;
+    devc->clock_edge = FALSE;
+//     devc->rle_mode = FALSE;
+//     devc->instant = FALSE;
+// 	devc->op_mode = OP_STREAM;
+//     devc->test_mode = SR_TEST_NONE;
+// 	devc->ch_mode = devc->profile->dev_caps.default_channelmode;
+//     devc->stream = (devc->op_mode == OP_STREAM);
+//     devc->buf_options = SR_BUF_UPLOAD;
+//     devc->th_level = SR_TH_3V3;
+//     devc->vth = 1.0;
+//     devc->filter = SR_FILTER_NONE;
+//     devc->timebase = 10000;
+//     devc->trigger_slope = DSO_TRIGGER_RISING;
+//     devc->trigger_source = DSO_TRIGGER_AUTO;
+//     devc->trigger_hpos = 0x0;
+//     devc->trigger_hrate = 0;
+//     devc->trigger_holdoff = 0;
+//     devc->zero = FALSE;
+//     devc->zero_branch = FALSE;
+//     devc->zero_comb_fgain = FALSE;
+//     devc->zero_comb = FALSE;
+//     devc->status = DSL_FINISH;
+
+//     devc->mstatus_valid = FALSE;
+//     devc->data_lock = FALSE;
+//     devc->max_height = 0;
+//     devc->trigger_margin = 8;
+//     devc->trigger_channel = 0;
+
+//     dsl_adjust_samplerate(devc);
 
 	return devc;
 }
@@ -1087,6 +1419,6 @@ SR_PRIV int dslogic_acquisition_start(const struct sr_dev_inst *sdi)
 SR_PRIV int dslogic_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	command_stop_acquisition(sdi);
-	abort_acquisition(sdi->priv);
+// 	abort_acquisition(sdi->priv);
 	return SR_OK;
 }
