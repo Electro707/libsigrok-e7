@@ -69,8 +69,13 @@
 #define DS_MODE_EXT_TEST		(1 << 14)
 #define DS_MODE_INT_TEST		(1 << 15)
 
-#define DSLOGIC_ATOMIC_SAMPLES		(sizeof(uint64_t) * 8)
+// #define DSLOGIC_ATOMIC_SAMPLES		(sizeof(uint64_t) * 8)
 #define DSLOGIC_ATOMIC_BYTES		sizeof(uint64_t)
+
+#define DSLOGIC_ATOMIC_BITS 6
+#define DSLOGIC_ATOMIC_SAMPLES (1 << DSLOGIC_ATOMIC_BITS)
+#define DSLOGIC_ATOMIC_SIZE (1 << (DSLOGIC_ATOMIC_BITS - 3))
+#define DSLOGIC_ATOMIC_MASK (0xFFFF << DSLOGIC_ATOMIC_BITS)
 
 /*
  * The FPGA is configured with TLV tuples. Length is specified as the
@@ -93,21 +98,6 @@
 #define CMD_CTL_WR              0xb0
 #define CMD_CTL_RD_PRE          0xb1
 #define CMD_CTL_RD              0xb2
-
-// read only
-#define bmGPIF_DONE     (1 << 7)
-#define bmFPGA_DONE     (1 << 6)
-#define bmFPGA_INIT_B   (1 << 5)
-// write only
-#define bmCH_CH0        (1 << 7)
-#define bmCH_COM        (1 << 6)
-#define bmCH_CH1        (1 << 5)
-// read/write
-#define bmSYS_OVERFLOW  (1 << 4)
-#define bmSYS_CLR       (1 << 3)
-#define bmSYS_EN        (1 << 2)
-#define bmLED_RED       (1 << 1)
-#define bmLED_GREEN     (1 << 0)
 
 #define bmWR_PROG_B        (1 << 2)
 #define bmWR_INTRDY        (1 << 7)
@@ -134,45 +124,65 @@
 #define EI2C_AWR 0x82
 #define EI2C_ARD 0x83
 
-#define bmNONE          0
-#define bmEEWP          (1 << 0)
-#define bmFORCE_RDY     (1 << 1)
-#define bmFORCE_STOP    (1 << 2)
-#define bmSCOPE_SET     (1 << 3)
-#define bmSCOPE_CLR     (1 << 4)
-#define bmBW20M_SET     (1 << 5)
-#define bmBW20M_CLR     (1 << 6)
+#define TRIG_EN_BIT 0
+#define CLK_TYPE_BIT 1
+#define CLK_EDGE_BIT 2
+#define RLE_MODE_BIT 3
+#define DSO_MODE_BIT 4
+#define HALF_MODE_BIT 5
+#define QUAR_MODE_BIT 6
+#define ANALOG_MODE_BIT 7
+#define FILTER_BIT 8
+#define INSTANT_BIT 9
+#define STRIG_MODE_BIT 11
+#define STREAM_MODE_BIT 12
+#define LPB_TEST_BIT 13
+#define EXT_TEST_BIT 14
+#define INT_TEST_BIT 15
+
+#define TriggerStages 16
+#define TriggerProbes 16
+#define MaxTriggerProbes 32
+
+// #undef min
+// #define min(a,b) ((a)<(b)?(a):(b))
+// #undef max
+// #define max(a,b) ((a)>(b)?(a):(b))
+
+/** Device test modes. */
+enum {
+    /** No test mode */
+    SR_TEST_NONE,
+    /** Internal pattern test mode */
+    SR_TEST_INTERNAL,
+    /** External pattern test mode */
+    SR_TEST_EXTERNAL,
+    /** SDRAM loopback test mode */
+    SR_TEST_LOOPBACK,
+};
+
+/** Device buffer mode */
+enum {
+    /** Stop immediately */
+    SR_BUF_STOP = 0,
+    /** Upload captured data */
+    SR_BUF_UPLOAD = 1,
+};
+
+
+
+/** Device input filter. */
+enum {
+    /** None */
+    SR_FILTER_NONE = 0,
+    /** One clock cycle */
+    SR_FILTER_1T = 1,
+};
 
 enum {
-    DSL_CTL_FW_VERSION		= 0,
-    DSL_CTL_REVID_VERSION	= 1,
-    DSL_CTL_HW_STATUS		= 2,
-    DSL_CTL_PROG_B			= 3,
-    DSL_CTL_SYS				= 4,
-    DSL_CTL_LED				= 5,
-    DSL_CTL_INTRDY			= 6,
-    DSL_CTL_WORDWIDE		= 7,
-
-    DSL_CTL_START			= 8,
-    DSL_CTL_STOP			= 9,
-    DSL_CTL_BULK_WR			= 10,
-    DSL_CTL_REG				= 11,
-    DSL_CTL_NVM				= 12,
-
-    DSL_CTL_I2C_DSO			= 13,
-    DSL_CTL_I2C_REG			= 14,
-    DSL_CTL_I2C_STATUS		= 15,
-
-    DSL_CTL_DSO_EN0			= 16,
-    DSL_CTL_DSO_DC0			= 17,
-    DSL_CTL_DSO_ATT0		= 18,
-    DSL_CTL_DSO_EN1			= 19,
-    DSL_CTL_DSO_DC1			= 20,
-    DSL_CTL_DSO_ATT1		= 21,
-
-    DSL_CTL_AWG_WR			= 22,
-    DSL_CTL_I2C_PROBE		= 23,
-    DSL_CTL_I2C_EXT         = 24,
+    SIMPLE_TRIGGER = 0,
+    ADV_TRIGGER,
+    SERIAL_TRIGGER,
 };
 
 ////////////////////////////////////
@@ -193,33 +203,56 @@ struct cmd_start_acquisition {
 struct fpga_config {
 	uint32_t sync;
 
-	uint16_t mode_header;
-	uint16_t mode;
-	uint16_t divider_header;
-	uint32_t divider;
-	uint16_t count_header;
-	uint32_t count;
-	uint16_t trig_pos_header;
-	uint32_t trig_pos;
-	uint16_t trig_glb_header;
-	uint16_t trig_glb;
-	uint16_t ch_en_header;
-	uint16_t ch_en;
+    uint16_t mode_header;                   // 0
+    uint16_t mode;
+    uint16_t divider_header;                // 1-2
+    uint16_t div_l;
+    uint16_t div_h;
+    uint16_t count_header;                  // 3-4
+    uint16_t cnt_l;
+    uint16_t cnt_h;
+    uint16_t trig_pos_header;               // 5-6
+    uint16_t tpos_l;
+    uint16_t tpos_h;
+    uint16_t trig_glb_header;               // 7
+    uint16_t trig_glb;
+    uint16_t dso_count_header;              // 8-9
+    uint16_t dso_cnt_l;
+    uint16_t dso_cnt_h;
+    uint16_t ch_en_header;                  // 10-11
+    uint16_t ch_en_l;
+    uint16_t ch_en_h;
+    uint16_t fgain_header;                  // 12
+    uint16_t fgain;
 
-	uint16_t trig_header;
-	uint16_t trig_mask0[NUM_TRIGGER_STAGES];
-	uint16_t trig_mask1[NUM_TRIGGER_STAGES];
-	uint16_t trig_value0[NUM_TRIGGER_STAGES];
-	uint16_t trig_value1[NUM_TRIGGER_STAGES];
-	uint16_t trig_edge0[NUM_TRIGGER_STAGES];
-	uint16_t trig_edge1[NUM_TRIGGER_STAGES];
-	uint16_t trig_logic0[NUM_TRIGGER_STAGES];
-	uint16_t trig_logic1[NUM_TRIGGER_STAGES];
-	uint32_t trig_count[NUM_TRIGGER_STAGES];
+    uint16_t trig_header;                   // 64
+    uint16_t trig_mask0[NUM_TRIGGER_STAGES];
+    uint16_t trig_mask1[NUM_TRIGGER_STAGES];
+    uint16_t trig_value0[NUM_TRIGGER_STAGES];
+    uint16_t trig_value1[NUM_TRIGGER_STAGES];
+    uint16_t trig_edge0[NUM_TRIGGER_STAGES];
+    uint16_t trig_edge1[NUM_TRIGGER_STAGES];
+    uint16_t trig_logic0[NUM_TRIGGER_STAGES];
+    uint16_t trig_logic1[NUM_TRIGGER_STAGES];
+    uint32_t trig_count[NUM_TRIGGER_STAGES];
 
-	uint32_t end_sync;
+    uint32_t end_sync;
 };
 
+struct DSL_setting_ext32 {
+    uint32_t sync;
+
+    uint16_t trig_header;                   // 96
+    uint16_t trig_mask0[NUM_TRIGGER_STAGES];
+    uint16_t trig_mask1[NUM_TRIGGER_STAGES];
+    uint16_t trig_value0[NUM_TRIGGER_STAGES];
+    uint16_t trig_value1[NUM_TRIGGER_STAGES];
+    uint16_t trig_edge0[NUM_TRIGGER_STAGES];
+    uint16_t trig_edge1[NUM_TRIGGER_STAGES];
+
+    uint16_t align_bytes;
+    uint32_t end_sync;
+};
 struct ctl_header {
     uint8_t dest;
     uint16_t offset;
@@ -245,6 +278,7 @@ struct ctl_rd_cmd {
 #define FPGA_UPLOAD_DELAY (10 * 1000)
 
 #define USB_TIMEOUT (3 * 1000)
+
 
 static int command_ctl_wr(libusb_device_handle *devhdl, struct ctl_wr_cmd cmd)
 {
@@ -295,7 +329,31 @@ static int command_ctl_rd(libusb_device_handle *devhdl, struct ctl_rd_cmd cmd)
     return SR_OK;
 }
 
-static int dslogic_wr_reg(const struct sr_dev_inst *sdi, uint8_t addr, uint8_t value)
+SR_PRIV int dslogic_hdl_version(const struct sr_dev_inst *sdi, uint8_t *value)
+{
+    struct sr_usb_dev_inst *usb;
+    struct libusb_device_handle *hdl;
+    struct ctl_rd_cmd rd_cmd;
+    int ret;
+    uint8_t rdata[HDL_VERSION_ADDR+1];
+
+    usb = sdi->conn;
+    hdl = usb->devhdl;
+
+    rd_cmd.header.dest = DSL_CTL_I2C_STATUS;
+    rd_cmd.header.offset = 0;
+    rd_cmd.header.size = HDL_VERSION_ADDR+1;
+    rd_cmd.data = rdata;
+    if ((ret = command_ctl_rd(hdl, rd_cmd)) != SR_OK) {
+        sr_err("Sent DSL_CTL_I2C_STATUS command failed.");
+        return SR_ERR;
+    }
+
+    *value = rdata[HDL_VERSION_ADDR];
+    return SR_OK;
+}
+
+SR_PRIV int dslogic_wr_reg(const struct sr_dev_inst *sdi, uint8_t addr, uint8_t value)
 {
     struct sr_usb_dev_inst *usb;
     struct libusb_device_handle *hdl;
@@ -338,7 +396,7 @@ static int dslogic_rd_reg(const struct sr_dev_inst *sdi, uint8_t addr, uint8_t *
 }
 
 
-static int command_get_fw_version(libusb_device_handle *devhdl,
+SR_PRIV int command_get_fw_version(libusb_device_handle *devhdl,
 				  struct version_info *vi)
 {
     struct ctl_rd_cmd rd_cmd;
@@ -352,8 +410,26 @@ static int command_get_fw_version(libusb_device_handle *devhdl,
         sr_err("Failed to get firmware version.");
         return SR_ERR;
     }
+    sr_info("Got %d.%d", rd_cmd_data[0], rd_cmd_data[1]);
     vi->major = rd_cmd_data[0];
     vi->minor = rd_cmd_data[1];
+    
+    return SR_OK;
+}
+
+SR_PRIV int dslogic_get_hardware_status(libusb_device_handle *devhdl, uint8_t *hw_info){
+    struct ctl_rd_cmd rd_cmd;
+    int ret;
+    
+    rd_cmd.header.dest = DSL_CTL_HW_STATUS;
+    rd_cmd.header.size = 1;
+    *hw_info = 0;
+    rd_cmd.data = hw_info;
+    if ((ret = command_ctl_rd(devhdl, rd_cmd)) != SR_OK) {
+        sr_err("Failed to get hardware infos.");
+        return SR_ERR;
+    }
+    
     return SR_OK;
 }
 
@@ -629,177 +705,362 @@ static uint16_t enabled_channel_mask(const struct sr_dev_inst *sdi)
  * accordingly.
  * @return @c true if any triggers are enabled, @c false otherwise.
  */
-static bool set_trigger(const struct sr_dev_inst *sdi, struct fpga_config *cfg)
-{
-	struct sr_trigger *trigger;
-	struct sr_trigger_stage *stage;
-	struct sr_trigger_match *match;
-	struct dev_context *devc;
-	const GSList *l, *m;
-	const unsigned int num_enabled_channels = enabled_channel_count(sdi);
-	int num_trigger_stages = 0;
-
-	int channelbit, i = 0;
-	uint32_t trigger_point;
-
-	devc = sdi->priv;
-
-	cfg->ch_en = enabled_channel_mask(sdi);
-
-	for (i = 0; i < NUM_TRIGGER_STAGES; i++) {
-		cfg->trig_mask0[i] = 0xffff;
-		cfg->trig_mask1[i] = 0xffff;
-		cfg->trig_value0[i] = 0;
-		cfg->trig_value1[i] = 0;
-		cfg->trig_edge0[i] = 0;
-		cfg->trig_edge1[i] = 0;
-		cfg->trig_logic0[i] = 2;
-		cfg->trig_logic1[i] = 2;
-		cfg->trig_count[i] = 0;
-	}
-
-	trigger_point = (devc->capture_ratio * devc->limit_samples) / 100;
-	if (trigger_point < DSLOGIC_ATOMIC_SAMPLES)
-		trigger_point = DSLOGIC_ATOMIC_SAMPLES;
-// 	const uint32_t mem_depth = devc->profile->mem_depth;
-    const uint32_t mem_depth = devc->profile->dev_caps.dso_depth;
-	const uint32_t max_trigger_point = devc->continuous_mode ? ((mem_depth * 10) / 100) :
-		((mem_depth * DS_MAX_TRIG_PERCENT) / 100);
-	if (trigger_point > max_trigger_point)
-		trigger_point = max_trigger_point;
-	cfg->trig_pos = trigger_point & ~(DSLOGIC_ATOMIC_SAMPLES - 1);
-
-	if (!(trigger = sr_session_trigger_get(sdi->session))) {
-		sr_dbg("No session trigger found");
-		return false;
-	}
-
-	for (l = trigger->stages; l; l = l->next) {
-		stage = l->data;
-		num_trigger_stages++;
-		for (m = stage->matches; m; m = m->next) {
-			match = m->data;
-			if (!match->channel->enabled)
-				/* Ignore disabled channels with a trigger. */
-				continue;
-			channelbit = 1 << (match->channel->index);
-			/* Simple trigger support (event). */
-			if (match->match == SR_TRIGGER_ONE) {
-				cfg->trig_mask0[0] &= ~channelbit;
-				cfg->trig_mask1[0] &= ~channelbit;
-				cfg->trig_value0[0] |= channelbit;
-				cfg->trig_value1[0] |= channelbit;
-			} else if (match->match == SR_TRIGGER_ZERO) {
-				cfg->trig_mask0[0] &= ~channelbit;
-				cfg->trig_mask1[0] &= ~channelbit;
-			} else if (match->match == SR_TRIGGER_FALLING) {
-				cfg->trig_mask0[0] &= ~channelbit;
-				cfg->trig_mask1[0] &= ~channelbit;
-				cfg->trig_edge0[0] |= channelbit;
-				cfg->trig_edge1[0] |= channelbit;
-			} else if (match->match == SR_TRIGGER_RISING) {
-				cfg->trig_mask0[0] &= ~channelbit;
-				cfg->trig_mask1[0] &= ~channelbit;
-				cfg->trig_value0[0] |= channelbit;
-				cfg->trig_value1[0] |= channelbit;
-				cfg->trig_edge0[0] |= channelbit;
-				cfg->trig_edge1[0] |= channelbit;
-			} else if (match->match == SR_TRIGGER_EDGE) {
-				cfg->trig_edge0[0] |= channelbit;
-				cfg->trig_edge1[0] |= channelbit;
-			}
-		}
-	}
-
-	cfg->trig_glb = (num_enabled_channels << 4) | (num_trigger_stages - 1);
-
-	return num_trigger_stages != 0;
-}
+// static bool set_trigger(const struct sr_dev_inst *sdi, struct fpga_config *cfg)
+// {
+// 	struct sr_trigger *trigger;
+// 	struct sr_trigger_stage *stage;
+// 	struct sr_trigger_match *match;
+// 	struct dev_context *devc;
+// 	const GSList *l, *m;
+// 	const unsigned int num_enabled_channels = enabled_channel_count(sdi);
+// 	int num_trigger_stages = 0;
+// 
+// 	int channelbit, i = 0;
+// 	uint32_t trigger_point;
+// 
+// 	devc = sdi->priv;
+// 
+// 	cfg->ch_en = enabled_channel_mask(sdi);
+// 
+// 	for (i = 0; i < NUM_TRIGGER_STAGES; i++) {
+// 		cfg->trig_mask0[i] = 0xffff;
+// 		cfg->trig_mask1[i] = 0xffff;
+// 		cfg->trig_value0[i] = 0;
+// 		cfg->trig_value1[i] = 0;
+// 		cfg->trig_edge0[i] = 0;
+// 		cfg->trig_edge1[i] = 0;
+// 		cfg->trig_logic0[i] = 2;
+// 		cfg->trig_logic1[i] = 2;
+// 		cfg->trig_count[i] = 0;
+// 	}
+// 
+// 	trigger_point = (devc->capture_ratio * devc->limit_samples) / 100;
+// 	if (trigger_point < DSLOGIC_ATOMIC_SAMPLES)
+// 		trigger_point = DSLOGIC_ATOMIC_SAMPLES;
+//     const uint32_t mem_depth = devc->profile->dev_caps.dso_depth;
+// 	const uint32_t max_trigger_point = devc->continuous_mode ? ((mem_depth * 10) / 100) :
+// 		((mem_depth * DS_MAX_TRIG_PERCENT) / 100);
+// 	if (trigger_point > max_trigger_point)
+// 		trigger_point = max_trigger_point;
+// 	cfg->trig_pos = trigger_point & ~(DSLOGIC_ATOMIC_SAMPLES - 1);
+// 
+// 	if (!(trigger = sr_session_trigger_get(sdi->session))) {
+// 		sr_dbg("No session trigger found");
+// 		return false;
+// 	}
+// 
+// 	for (l = trigger->stages; l; l = l->next) {
+// 		stage = l->data;
+// 		num_trigger_stages++;
+// 		for (m = stage->matches; m; m = m->next) {
+// 			match = m->data;
+// 			if (!match->channel->enabled)
+// 				/* Ignore disabled channels with a trigger. */
+// 				continue;
+// 			channelbit = 1 << (match->channel->index);
+// 			/* Simple trigger support (event). */
+// 			if (match->match == SR_TRIGGER_ONE) {
+// 				cfg->trig_mask0[0] &= ~channelbit;
+// 				cfg->trig_mask1[0] &= ~channelbit;
+// 				cfg->trig_value0[0] |= channelbit;
+// 				cfg->trig_value1[0] |= channelbit;
+// 			} else if (match->match == SR_TRIGGER_ZERO) {
+// 				cfg->trig_mask0[0] &= ~channelbit;
+// 				cfg->trig_mask1[0] &= ~channelbit;
+// 			} else if (match->match == SR_TRIGGER_FALLING) {
+// 				cfg->trig_mask0[0] &= ~channelbit;
+// 				cfg->trig_mask1[0] &= ~channelbit;
+// 				cfg->trig_edge0[0] |= channelbit;
+// 				cfg->trig_edge1[0] |= channelbit;
+// 			} else if (match->match == SR_TRIGGER_RISING) {
+// 				cfg->trig_mask0[0] &= ~channelbit;
+// 				cfg->trig_mask1[0] &= ~channelbit;
+// 				cfg->trig_value0[0] |= channelbit;
+// 				cfg->trig_value1[0] |= channelbit;
+// 				cfg->trig_edge0[0] |= channelbit;
+// 				cfg->trig_edge1[0] |= channelbit;
+// 			} else if (match->match == SR_TRIGGER_EDGE) {
+// 				cfg->trig_edge0[0] |= channelbit;
+// 				cfg->trig_edge1[0] |= channelbit;
+// 			}
+// 		}
+// 	}
+// 
+// 	cfg->trig_glb = (num_enabled_channels << 4) | (num_trigger_stages - 1);
+// 
+// 	return num_trigger_stages != 0;
+// }
 
 static int fpga_configure(const struct sr_dev_inst *sdi)
 {
-	const struct dev_context *const devc = sdi->priv;
+	struct dev_context *devc = sdi->priv;
 	const struct sr_usb_dev_inst *const usb = sdi->conn;
+    struct libusb_device_handle *hdl = usb->devhdl;
 	uint8_t c[3];
 	struct fpga_config cfg;
 	uint16_t mode = 0;
 	uint32_t divider;
 	int transferred, len, ret;
+    struct DSL_setting_ext32 setting_ext32;
+    struct ctl_wr_cmd wr_cmd;
+    struct ctl_rd_cmd rd_cmd;
+    struct sr_trigger *trigger;
+    uint32_t tmp_u32;
+    uint64_t tmp_u64;
+    gboolean qutr_trig;
+    gboolean half_trig;
+    uint32_t trigger_point;
+    uint32_t arm_size;
+    uint8_t rd_cmd_data;
+    const unsigned int num_enabled_channels = enabled_channel_count(sdi);
+    int num_trigger_stages = 0;
+    const GSList *l;
+    int i;
 
 	sr_dbg("Configuring FPGA.");
-
-	WL32(&cfg.sync, DS_CFG_START);
-	WL16(&cfg.mode_header, DS_CFG_MODE);
-	WL16(&cfg.divider_header, DS_CFG_DIVIDER);
-	WL16(&cfg.count_header, DS_CFG_COUNT);
-	WL16(&cfg.trig_pos_header, DS_CFG_TRIG_POS);
-	WL16(&cfg.trig_glb_header, DS_CFG_TRIG_GLB);
-	WL16(&cfg.ch_en_header, DS_CFG_CH_EN);
-	WL16(&cfg.trig_header, DS_CFG_TRIG);
-	WL32(&cfg.end_sync, DS_CFG_END);
-
-	/* Pass in the length of a fixed-size struct. Really. */
-	len = sizeof(struct fpga_config) / 2;
-	c[0] = len & 0xff;
-	c[1] = (len >> 8) & 0xff;
-	c[2] = (len >> 16) & 0xff;
-
-	ret = libusb_control_transfer(usb->devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
-			LIBUSB_ENDPOINT_OUT, DS_CMD_SETTING, 0x0000, 0x0000,
-			c, sizeof(c), USB_TIMEOUT);
-	if (ret < 0) {
-		sr_err("Failed to send FPGA configure command: %s.",
-			libusb_error_name(ret));
-		return SR_ERR;
+    
+    if (!(trigger = sr_session_trigger_get(sdi->session))) {
+		sr_dbg("No session trigger found");
+		return false;
 	}
 
-	if (set_trigger(sdi, &cfg))
-		mode |= DS_MODE_TRIG_EN;
+	cfg.sync = 0xf5a5f5a5;
+    cfg.mode_header = 0x0001;
+    cfg.divider_header = 0x0102;
+    cfg.count_header = 0x0302;
+    cfg.trig_pos_header = 0x0502;
+    cfg.trig_glb_header = 0x0701;
+    cfg.dso_count_header = 0x0802;
+    cfg.ch_en_header = 0x0a02;
+    cfg.fgain_header = 0x0c01;
+    cfg.trig_header = 0x40a0;
+    cfg.end_sync = 0xfa5afa5a;
+    
+    setting_ext32.sync = 0xf5a5f5a5;
+    setting_ext32.trig_header = 0x6060;
+    setting_ext32.align_bytes = 0xffff;
+    setting_ext32.end_sync = 0xfa5afa5a;
 
-	if (devc->mode == DS_OP_INTERNAL_TEST)
-		mode |= DS_MODE_INT_TEST;
-	else if (devc->mode == DS_OP_EXTERNAL_TEST)
-		mode |= DS_MODE_EXT_TEST;
-	else if (devc->mode == DS_OP_LOOPBACK_TEST)
-		mode |= DS_MODE_LPB_TEST;
+	// basic configuration
+    cfg.mode =    
+//                    (trigger->trigger_en << TRIG_EN_BIT) +
+                   (devc->clock_type << CLK_TYPE_BIT) +
+                   (devc->clock_edge << CLK_EDGE_BIT) +
+                   (devc->rle_mode << RLE_MODE_BIT) +
+                   ((devc->cur_samplerate == devc->profile->dev_caps.half_samplerate) << HALF_MODE_BIT) +
+                   ((devc->cur_samplerate == devc->profile->dev_caps.quarter_samplerate) << QUAR_MODE_BIT) +
+                   ((devc->filter == SR_FILTER_1T) << FILTER_BIT) +
+                   (devc->instant << INSTANT_BIT) +
+//                    ((trigger->trigger_mode == SERIAL_TRIGGER) << STRIG_MODE_BIT) +
+                   ((devc->stream) << STREAM_MODE_BIT) +
+                   ((devc->test_mode == SR_TEST_LOOPBACK) << LPB_TEST_BIT) +
+                   ((devc->test_mode == SR_TEST_EXTERNAL) << EXT_TEST_BIT) +
+                   ((devc->test_mode == SR_TEST_INTERNAL) << INT_TEST_BIT);
 
-	if (devc->cur_samplerate == DS_MAX_LOGIC_SAMPLERATE * 2)
-		mode |= DS_MODE_HALF_MODE;
-	else if (devc->cur_samplerate == DS_MAX_LOGIC_SAMPLERATE * 4)
-		mode |= DS_MODE_QUAR_MODE;
+    // sample rate divider
+    tmp_u32  = (uint32_t)ceil(channel_modes[devc->ch_mode].hw_max_samplerate * 1.0 / devc->cur_samplerate);
+    devc->unit_pitch = ceil(channel_modes[devc->ch_mode].hw_min_samplerate * 1.0 / devc->cur_samplerate);
+    cfg.div_h = ((tmp_u32 >= channel_modes[devc->ch_mode].pre_div) ? channel_modes[devc->ch_mode].pre_div - 1U : tmp_u32 - 1U) << 8;
+    tmp_u32 = (uint32_t)ceil(tmp_u32 * 1.0 / channel_modes[devc->ch_mode].pre_div);
+    cfg.div_l = tmp_u32 & 0x0000ffff;
+    cfg.div_h += tmp_u32 >> 16;
 
-	if (devc->continuous_mode)
-		mode |= DS_MODE_STREAM_MODE;
-	if (devc->external_clock) {
-		mode |= DS_MODE_CLK_TYPE;
-		if (devc->clock_edge == DS_EDGE_FALLING)
-			mode |= DS_MODE_CLK_EDGE;
-	}
-	if (devc->limit_samples > DS_MAX_LOGIC_DEPTH *
-		ceil(devc->cur_samplerate * 1.0 / DS_MAX_LOGIC_SAMPLERATE)
-		&& !devc->continuous_mode) {
-		/* Enable RLE for long captures.
-		 * Without this, captured data present errors.
-		 */
-		mode |= DS_MODE_RLE_MODE;
-	}
+    // capture counter
+    tmp_u64 = devc->actual_samples;
+    tmp_u64 >>= 4; // hardware minimum unit 64
+    cfg.cnt_l = tmp_u64 & 0x0000ffff;
+    cfg.cnt_h = tmp_u64 >> 16;
+    tmp_u64 = devc->actual_samples;
+    cfg.dso_cnt_l = tmp_u64 & 0x0000ffff;
+    cfg.dso_cnt_h = tmp_u64 >> 16;
 
-	WL16(&cfg.mode, mode);
-	divider = ceil(DS_MAX_LOGIC_SAMPLERATE * 1.0 / devc->cur_samplerate);
-	WL32(&cfg.divider, divider);
+    // trigger position
+    // must be align to minimum parallel bits
+//     trigger_point = (devc->capture_ratio * devc->limit_samples) / 100;
+//     tmp_u32 = max(trigger_point, DSLOGIC_ATOMIC_SAMPLES);
+//     if (devc->stream)
+//         tmp_u32 = min(tmp_u32, dsl_channel_depth(sdi) * 10 / 100);
+//     else
+//         tmp_u32 = min(tmp_u32, dsl_channel_depth(sdi) * DS_MAX_TRIG_PERCENT / 100);
+//     cfg.tpos_l = tmp_u32 & DSLOGIC_ATOMIC_MASK;
+//     cfg.tpos_h = tmp_u32 >> 16;
+    
+    trigger_point = (devc->capture_ratio * devc->limit_samples) / 100;
+	if (trigger_point < DSLOGIC_ATOMIC_SAMPLES) {
+		trigger_point = DSLOGIC_ATOMIC_SAMPLES;
+    }
+    const uint32_t mem_depth = devc->profile->dev_caps.dso_depth;
+	const uint32_t max_trigger_point = devc->continuous_mode ? ((mem_depth * 10) / 100) :
+		((mem_depth * DS_MAX_TRIG_PERCENT) / 100);
+	if (trigger_point > max_trigger_point){
+		trigger_point = max_trigger_point;
+    }
+// 	cfg->trig_pos = trigger_point & ~(DSLOGIC_ATOMIC_SAMPLES - 1);
+    cfg.tpos_l = trigger_point & DSLOGIC_ATOMIC_MASK;
+    cfg.tpos_h = trigger_point >> 16;
 
-	/* Number of 16-sample units. */
-	WL32(&cfg.count, devc->limit_samples / 16);
+    for (l = trigger->stages; l; l = l->next) {
+        num_trigger_stages++;
+    }
+    // trigger global settings
+    cfg.trig_glb = ((num_enabled_channels & 0x1f) << 8) + (num_trigger_stages & 0x00ff);
 
-	len = sizeof(struct fpga_config);
-	ret = libusb_bulk_transfer(usb->devhdl, 2 | LIBUSB_ENDPOINT_OUT,
-			(unsigned char *)&cfg, len, &transferred, USB_TIMEOUT);
-	if (ret < 0 || transferred != len) {
-		sr_err("Failed to send FPGA configuration: %s.", libusb_error_name(ret));
-		return SR_ERR;
-	}
+    // channel enable mapping
+    cfg.ch_en_l = 0;
+    cfg.ch_en_h = 0;
+    for (l = sdi->channels; l; l = l->next) {
+        struct sr_channel *probe = (struct sr_channel *)l->data;
+        if (probe->index < 16)
+            cfg.ch_en_l += probe->enabled << probe->index;
+        else
+            cfg.ch_en_h += probe->enabled << (probe->index - 16);
+    }
 
-	return SR_OK;
+    // digital fgain
+    for (l = sdi->channels; l; l = l->next) {
+        struct sr_channel *probe = (struct sr_channel *)l->data;
+        // Look into this some more. Might not be needed for logic analyzer??
+//         cfg.fgain = probe->digi_fgain;
+        break;
+    }
+
+    // trigger advanced configuration
+    if (1) {
+            //TODO: What the fuck is this shit. I shit you not this is directly from dsview
+//         qutr_trig = !(devc->profile->dev_caps.feature_caps & CAPS_FEATURE_USB30) && (cfg.mode & (1 << QUAR_MODE_BIT));
+//         half_trig = (!(devc->profile->dev_caps.feature_caps & CAPS_FEATURE_USB30) && cfg.mode & (1 << HALF_MODE_BIT)) ||
+//                     ((devc->profile->dev_caps.feature_caps & CAPS_FEATURE_USB30) && cfg.mode & (1 << QUAR_MODE_BIT));
+// 
+//         cfg.trig_mask0[0] = ds_trigger_get_mask0(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+//         cfg.trig_mask1[0] = ds_trigger_get_mask1(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+//         cfg.trig_value0[0] = ds_trigger_get_value0(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+//         cfg.trig_value1[0] = ds_trigger_get_value1(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+//         cfg.trig_edge0[0] = ds_trigger_get_edge0(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+//         cfg.trig_edge1[0] = ds_trigger_get_edge1(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+// 
+//         setting_ext32.trig_mask0[0] = ds_trigger_get_mask0(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+//         setting_ext32.trig_mask1[0] = ds_trigger_get_mask1(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+//         setting_ext32.trig_value0[0] = ds_trigger_get_value0(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+//         setting_ext32.trig_value1[0] = ds_trigger_get_value1(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+//         setting_ext32.trig_edge0[0] = ds_trigger_get_edge0(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+//         setting_ext32.trig_edge1[0] = ds_trigger_get_edge1(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+
+//         cfg.trig_logic0[0] = (trigger->trigger_logic[TriggerStages] << 1) + trigger->trigger0_inv[TriggerStages];
+//         cfg.trig_logic1[0] = (trigger->trigger_logic[TriggerStages] << 1) + trigger->trigger1_inv[TriggerStages];
+
+//         cfg.trig_count[0] = trigger->trigger0_count[TriggerStages];
+
+        for (i = 1; i < NUM_TRIGGER_STAGES; i++) {
+            cfg.trig_mask0[i] = 0xffff;
+            cfg.trig_mask1[i] = 0xffff;
+            cfg.trig_value0[i] = 0;
+            cfg.trig_value1[i] = 0;
+            cfg.trig_edge0[i] = 0;
+            cfg.trig_edge1[i] = 0;
+
+            setting_ext32.trig_mask0[i] = 0xffff;
+            setting_ext32.trig_mask1[i] = 0xffff;
+            setting_ext32.trig_value0[i] = 0;
+            setting_ext32.trig_value1[i] = 0;
+            setting_ext32.trig_edge0[i] = 0;
+            setting_ext32.trig_edge1[i] = 0;
+
+            cfg.trig_logic0[i] = 2;
+            cfg.trig_logic1[i] = 2;
+
+            cfg.trig_count[i] = 0;
+        }
+    } else {
+        // This will never excute. Advanced triggering code was down here
+    }
+
+    if (!(devc->profile->usb_speed == LIBUSB_SPEED_SUPER)) {
+        // set GPIF to be wordwide
+        wr_cmd.header.dest = DSL_CTL_WORDWIDE;
+        wr_cmd.header.size = 1;
+        wr_cmd.data[0] = bmWR_WORDWIDE;
+        if ((ret = command_ctl_wr(hdl, wr_cmd)) != SR_OK) {
+            sr_err("Sent DSL_CTL_WORDWIDE command failed.");
+            return SR_ERR;
+        }
+    }
+
+    // send bulk write control command
+    arm_size = sizeof(struct fpga_config) / sizeof(uint16_t);
+    wr_cmd.header.dest = DSL_CTL_BULK_WR;
+    wr_cmd.header.size = 3;
+    wr_cmd.data[0] = (uint8_t)arm_size;
+    wr_cmd.data[1] = (uint8_t)(arm_size >> 8);
+    wr_cmd.data[2] = (uint8_t)(arm_size >> 16);
+    if ((ret = command_ctl_wr(hdl, wr_cmd)) != SR_OK) {
+        sr_err("Sent bulk write command of arm FPGA failed.");
+        return SR_ERR;
+    }
+    // check sys_clr dessert
+    rd_cmd.header.dest = DSL_CTL_HW_STATUS;
+    rd_cmd.header.size = 1;
+    rd_cmd_data = 0;
+    rd_cmd.data = &rd_cmd_data;
+    while(1) {
+        if ((ret = command_ctl_rd(hdl, rd_cmd)) != SR_OK)
+            return SR_ERR;
+        if (rd_cmd_data & bmSYS_CLR)
+            break;
+    }
+
+    // send bulk data
+    // setting
+    ret = libusb_bulk_transfer(hdl, 2 | LIBUSB_ENDPOINT_OUT,
+                               (unsigned char *)&cfg,
+                               sizeof(struct fpga_config),
+                               &transferred, 1000);
+    if (ret < 0) {
+        sr_err("Unable to arm FPGA of dsl device: %s.",
+                libusb_error_name(ret));
+        return SR_ERR;
+    } else if (transferred != sizeof(struct fpga_config)) {
+        sr_err("Arm FPGA error: expacted transfer size %d; actually %d",
+                sizeof(struct fpga_config), transferred);
+        return SR_ERR;
+    }
+    // setting_ext32
+    if (devc->profile->dev_caps.feature_caps & CAPS_FEATURE_LA_CH32) {
+        ret = libusb_bulk_transfer(hdl, 2 | LIBUSB_ENDPOINT_OUT,
+                                   (unsigned char *)&setting_ext32,
+                                   sizeof(struct DSL_setting_ext32),
+                                   &transferred, 1000);
+        if (ret < 0) {
+            sr_err("Unable to arm FPGA(setting_ext32) of dsl device: %s.",
+                    libusb_error_name(ret));
+            return SR_ERR;
+        } else if (transferred != sizeof(struct DSL_setting_ext32)) {
+            sr_err("Arm FPGA(setting_ext32) error: expacted transfer size %d; actually %d",
+                    sizeof(struct DSL_setting_ext32), transferred);
+            return SR_ERR;
+        }
+    }
+
+    // assert INTRDY high (indicate data end)
+    wr_cmd.header.dest = DSL_CTL_INTRDY;
+    wr_cmd.header.size = 1;
+    wr_cmd.data[0] = bmWR_INTRDY;
+    if ((ret = command_ctl_wr(hdl, wr_cmd)) != SR_OK)
+        return SR_ERR;
+
+
+    // check FPGA_DONE bit
+    rd_cmd.header.dest = DSL_CTL_HW_STATUS;
+    rd_cmd.header.size = 1;
+    rd_cmd_data = 0;
+    rd_cmd.data = &rd_cmd_data;
+    if ((ret = command_ctl_rd(hdl, rd_cmd)) != SR_OK)
+        return SR_ERR;
+    if (rd_cmd_data & bmGPIF_DONE) {
+        sr_info("Arm FPGA done");
+        return SR_OK;
+    } else {
+        return SR_ERR;
+    }
 }
 
 SR_PRIV int dslogic_config_adc(const struct sr_dev_inst *sdi, const struct dslogic_adc_config *config)
@@ -955,8 +1216,8 @@ SR_PRIV struct dev_context *dslogic_dev_new(void)
 //     devc->channel = NULL;
     devc->profile = NULL;
 	devc->fw_updated = 0;
-    devc->cur_samplerate = devc->profile->dev_caps.default_samplerate;
-    devc->limit_samples = devc->profile->dev_caps.default_samplelimit;
+    devc->cur_samplerate = 0;
+    devc->limit_samples = 0;
 //     devc->clock_type = FALSE;
     devc->clock_edge = FALSE;
 //     devc->rle_mode = FALSE;

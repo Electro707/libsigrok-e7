@@ -274,6 +274,7 @@ static const uint32_t devopts[] = {
 	SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_EXTERNAL_CLOCK | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_CLOCK_EDGE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+    SR_CONF_RLE | SR_CONF_SET | SR_CONF_GET,
 };
 
 static const int32_t trigger_matches[] = {
@@ -512,6 +513,9 @@ static int dev_open(struct sr_dev_inst *sdi)
 	struct dev_context *devc;
 	int ret;
 	int64_t timediff_us, timediff_ms;
+    
+    gboolean fpga_done;
+    uint8_t hw_info;
 
 	devc = sdi->priv;
 	usb = sdi->conn;
@@ -551,10 +555,31 @@ static int dev_open(struct sr_dev_inst *sdi)
 
 		return SR_ERR;
 	}
+    
+    if(dslogic_get_hardware_status(usb->devhdl, &hw_info) != SR_OK){
+        return SR_ERR;
+    }
+    
+    fpga_done = (hw_info & bmFPGA_DONE) != 0;
+//     if (sdi->status == SR_ST_ACTIVE) {
+        if (!(fpga_done)) {
+            if ((ret = dslogic_fpga_firmware_upload(sdi)) != SR_OK) {
+                sr_err("%s: Configure FPGA failed!", __func__);
+                return SR_ERR;
+            }
+        } else {
+            ret = dslogic_wr_reg(sdi, CTR0_ADDR, bmNONE); // dessert clear
+            /* Check HDL version */
+            ret = dslogic_hdl_version(sdi, &hw_info);
+            if ((ret != SR_OK) || (hw_info != DSL_HDL_VERSION)) {
+               sr_err("%s: HDL verison incompatible!", __func__);
+               return SR_ERR;
+            }
+        }
+//     }
 
-
-	if ((ret = dslogic_fpga_firmware_upload(sdi)) != SR_OK)
-		return ret;
+// 	if ((ret = dslogic_fpga_firmware_upload(sdi)) != SR_OK)
+// 		return ret;
 
 	if (devc->cur_samplerate == 0) {
 		/* Samplerate hasn't been set; default to the slowest one. */
@@ -644,6 +669,9 @@ static int config_get(uint32_t key, GVariant **data,
 			return SR_ERR_BUG;
 		*data = g_variant_new_string(signal_edges[0]);
 		break;
+    case SR_CONF_RLE:
+        *data = g_variant_new_boolean(devc->rle_mode);
+        break;
 	default:
 		return SR_ERR_NA;
 	}
@@ -699,6 +727,8 @@ static int config_set(uint32_t key, GVariant *data,
 			return SR_ERR_ARG;
 		devc->clock_edge = idx;
 		break;
+    case SR_CONF_RLE:
+        devc->rle_mode = g_variant_get_boolean(data);
 	default:
 		return SR_ERR_NA;
 	}

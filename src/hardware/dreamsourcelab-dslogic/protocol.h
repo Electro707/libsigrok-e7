@@ -42,6 +42,8 @@
 #define NUM_TRIGGER_STAGES	16
 
 #define DSLOGIC_REQUIRED_VERSION_MAJOR	2
+#define DSL_REQUIRED_VERSION_MINOR	 0
+#define DSL_HDL_VERSION             0x0D
 
 /* 6 delay states of up to 256 clock ticks */
 #define MAX_SAMPLE_DELAY	(6 * 256)
@@ -95,6 +97,30 @@
 #define DSLOGIC_PLUS_FPGA_FIRMWARE "dreamsourcelab-dslogic-plus-fpga.fw"
 #define DSLOGIC_BASIC_FPGA_FIRMWARE "dreamsourcelab-dslogic-basic-fpga.fw"
 #define DSLOGIC_U3PRO16_FPGA_FIRMWARE "dreamsourcelab-dslogic-u3pro16-fpga.fw"
+
+// read only
+#define bmGPIF_DONE     (1 << 7)
+#define bmFPGA_DONE     (1 << 6)
+#define bmFPGA_INIT_B   (1 << 5)
+// write only
+#define bmCH_CH0        (1 << 7)
+#define bmCH_COM        (1 << 6)
+#define bmCH_CH1        (1 << 5)
+// read/write
+#define bmSYS_OVERFLOW  (1 << 4)
+#define bmSYS_CLR       (1 << 3)
+#define bmSYS_EN        (1 << 2)
+#define bmLED_RED       (1 << 1)
+#define bmLED_GREEN     (1 << 0)
+
+#define bmNONE          0
+#define bmEEWP          (1 << 0)
+#define bmFORCE_RDY     (1 << 1)
+#define bmFORCE_STOP    (1 << 2)
+#define bmSCOPE_SET     (1 << 3)
+#define bmSCOPE_CLR     (1 << 4)
+#define bmBW20M_SET     (1 << 5)
+#define bmBW20M_CLR     (1 << 6)
 
 enum CHANNEL_ID {
     DSL_STREAM20x16 = 0,
@@ -384,6 +410,17 @@ struct dev_context {
 	int clock_edge;
 	double cur_threshold;
     
+    gboolean rle_mode;
+    gboolean clock_type;
+    uint16_t filter;
+    gboolean stream;
+    uint8_t  test_mode;
+    enum CHANNEL_ID ch_mode;
+    gboolean instant;
+    uint64_t actual_samples;
+    uint16_t unit_pitch;
+    uint16_t th_level;
+    
     gboolean abort;
     int status;
 };
@@ -477,6 +514,46 @@ static const struct dslogic_channels channel_modes[] = {
 //      SR_KHZ(10), SR_MHZ(500), 1, "Use Channels 0~1 (Max 1GHz)"}
 };
 
+/** Device threshold level. */
+enum {
+    /** 1.8/2.5/3.3 level */
+    SR_TH_3V3 = 0,
+    /** 5.0 level */
+    SR_TH_5V0 = 1,
+};
+
+enum {
+    DSL_CTL_FW_VERSION		= 0,
+    DSL_CTL_REVID_VERSION	= 1,
+    DSL_CTL_HW_STATUS		= 2,
+    DSL_CTL_PROG_B			= 3,
+    DSL_CTL_SYS				= 4,
+    DSL_CTL_LED				= 5,
+    DSL_CTL_INTRDY			= 6,
+    DSL_CTL_WORDWIDE		= 7,
+
+    DSL_CTL_START			= 8,
+    DSL_CTL_STOP			= 9,
+    DSL_CTL_BULK_WR			= 10,
+    DSL_CTL_REG				= 11,
+    DSL_CTL_NVM				= 12,
+
+    DSL_CTL_I2C_DSO			= 13,
+    DSL_CTL_I2C_REG			= 14,
+    DSL_CTL_I2C_STATUS		= 15,
+
+    DSL_CTL_DSO_EN0			= 16,
+    DSL_CTL_DSO_DC0			= 17,
+    DSL_CTL_DSO_ATT0		= 18,
+    DSL_CTL_DSO_EN1			= 19,
+    DSL_CTL_DSO_DC1			= 20,
+    DSL_CTL_DSO_ATT1		= 21,
+
+    DSL_CTL_AWG_WR			= 22,
+    DSL_CTL_I2C_PROBE		= 23,
+    DSL_CTL_I2C_EXT         = 24,
+};
+
 SR_PRIV int dslogic_fpga_firmware_upload(const struct sr_dev_inst *sdi);
 SR_PRIV int dslogic_set_voltage_threshold(const struct sr_dev_inst *sdi, double threshold);
 SR_PRIV int dslogic_config_adc(const struct sr_dev_inst *sdi, const struct dslogic_adc_config *config);
@@ -484,5 +561,9 @@ SR_PRIV int dslogic_dev_open(struct sr_dev_inst *sdi, struct sr_dev_driver *di);
 SR_PRIV struct dev_context *dslogic_dev_new(void);
 SR_PRIV int dslogic_acquisition_start(const struct sr_dev_inst *sdi);
 SR_PRIV int dslogic_acquisition_stop(struct sr_dev_inst *sdi);
+
+SR_PRIV int dslogic_hdl_version(const struct sr_dev_inst *sdi, uint8_t *value);
+SR_PRIV int dslogic_get_hardware_status(libusb_device_handle *devhdl, uint8_t *hw_info);
+SR_PRIV int dslogic_wr_reg(const struct sr_dev_inst *sdi, uint8_t addr, uint8_t value);
 
 #endif
