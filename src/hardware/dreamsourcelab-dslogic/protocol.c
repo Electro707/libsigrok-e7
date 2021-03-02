@@ -144,10 +144,13 @@
 #define TriggerProbes 16
 #define MaxTriggerProbes 32
 
-// #undef min
-// #define min(a,b) ((a)<(b)?(a):(b))
-// #undef max
-// #define max(a,b) ((a)>(b)?(a):(b))
+/*
+ * packet content check
+ */
+#define TRIG_CHECKID 0x55555555
+#define DSO_PKTID 0xa500
+
+#define SAMPLES_ALIGN 1023ULL
 
 /** Device test modes. */
 enum {
@@ -179,10 +182,17 @@ enum {
     SR_FILTER_1T = 1,
 };
 
+// Not needed as only simple trigger will be available for now
+// enum {
+//     SIMPLE_TRIGGER = 0,
+//     ADV_TRIGGER,
+//     SERIAL_TRIGGER,
+// };
+
 enum {
-    SIMPLE_TRIGGER = 0,
-    ADV_TRIGGER,
-    SERIAL_TRIGGER,
+    SR_PKT_OK,
+    SR_PKT_SOURCE_ERROR,
+    SR_PKT_DATA_ERROR,
 };
 
 ////////////////////////////////////
@@ -253,6 +263,7 @@ struct DSL_setting_ext32 {
     uint16_t align_bytes;
     uint32_t end_sync;
 };
+
 struct ctl_header {
     uint8_t dest;
     uint16_t offset;
@@ -267,6 +278,8 @@ struct ctl_rd_cmd {
     uint8_t *data;
 };
 #pragma pack(pop)
+
+static void LIBUSB_CALL trigger_receive(struct libusb_transfer *transfer);
 
 /*
  * This should be larger than the FPGA bitstream image so that it'll get
@@ -395,7 +408,6 @@ static int dslogic_rd_reg(const struct sr_dev_inst *sdi, uint8_t addr, uint8_t *
     return SR_OK;
 }
 
-
 SR_PRIV int command_get_fw_version(libusb_device_handle *devhdl,
 				  struct version_info *vi)
 {
@@ -417,6 +429,99 @@ SR_PRIV int command_get_fw_version(libusb_device_handle *devhdl,
     return SR_OK;
 }
 
+static unsigned int enabled_channel_count(const struct sr_dev_inst *sdi)
+{
+	unsigned int count = 0;
+	for (const GSList *l = sdi->channels; l; l = l->next) {
+		const struct sr_channel *const probe = (struct sr_channel *)l->data;
+		if (probe->enabled)
+			count++;
+	}
+	return count;
+}
+
+static uint16_t enabled_channel_mask(const struct sr_dev_inst *sdi)
+{
+	unsigned int mask = 0;
+	for (const GSList *l = sdi->channels; l; l = l->next) {
+		const struct sr_channel *const probe = (struct sr_channel *)l->data;
+		if (probe->enabled)
+			mask |= 1 << probe->index;
+	}
+	return mask;
+}
+
+static size_t to_bytes_per_ms(const struct sr_dev_inst *sdi)
+{
+	const struct dev_context *const devc = sdi->priv;
+	const size_t ch_count = enabled_channel_count(sdi);
+	if (devc->continuous_mode)
+		return (devc->cur_samplerate * ch_count) / (1000 * 8);
+
+
+	/* If we're in buffered mode, the transfer rate is not so important,
+	 * but we expect to get at least 10% of the high-speed USB bandwidth.
+	 */
+	return 35000000 / (1000 * 10);
+}
+
+static size_t get_buffer_size(const struct sr_dev_inst *sdi)
+{
+	/*
+	 * The buffer should be large enough to hold 10ms of data and
+	 * a multiple of the size of a data atom.
+	 */
+	const size_t block_size = enabled_channel_count(sdi) * 512;
+	const size_t s = 10 * to_bytes_per_ms(sdi);
+	if (!block_size)
+		return s;
+	return ((s + block_size - 1) / block_size) * block_size;
+}
+
+static int dsl_header_size(const struct dev_context *devc)
+{
+    int size;
+
+    if (devc->profile->dev_caps.feature_caps & CAPS_FEATURE_USB30)
+        size = SR_KB(1);
+    else
+        size = SR_B(512);
+    return size;
+}
+
+static unsigned int get_number_of_transfers(const struct sr_dev_inst *sdi)
+{
+// 	/* Total buffer size should be able to hold about 100ms of data. */
+// 	const unsigned int s = get_buffer_size(sdi);
+// 	const unsigned int n = (100 * to_bytes_per_ms(sdi) + s - 1) / s;
+// 	return (n > NUM_SIMUL_TRANSFERS) ? NUM_SIMUL_TRANSFERS : n;
+    
+    unsigned int n;
+    struct dev_context *devc;
+    devc = sdi->priv;
+
+    #ifndef _WIN32
+    /* Total buffer size should be able to hold about 100ms of data. */
+    n = (devc->stream) ? ceil(get_total_buffer_time(devc) * 1.0f * to_bytes_per_ms(sdi) / get_buffer_size(sdi)) : 1;
+    #else
+    n = (devc->stream) ? ceil(get_total_buffer_time(devc) * 1.0f * to_bytes_per_ms(sdi) / get_buffer_size(sdi)) :
+        (devc->profile->usb_speed == LIBUSB_SPEED_SUPER) ? 16 : 4;
+    #endif
+
+    if (n > NUM_SIMUL_TRANSFERS)
+        return NUM_SIMUL_TRANSFERS;
+
+    return n;
+}
+
+static unsigned int get_timeout(const struct sr_dev_inst *sdi)
+{
+	const size_t total_size = get_buffer_size(sdi) *
+		get_number_of_transfers(sdi);
+	const unsigned int timeout = total_size / to_bytes_per_ms(sdi);
+	return timeout + timeout / 4; /* Leave a headroom of 25% percent. */
+}
+
 SR_PRIV int dslogic_get_hardware_status(libusb_device_handle *devhdl, uint8_t *hw_info){
     struct ctl_rd_cmd rd_cmd;
     int ret;
@@ -431,53 +536,6 @@ SR_PRIV int dslogic_get_hardware_status(libusb_device_handle *devhdl, uint8_t *h
     }
     
     return SR_OK;
-}
-
-static int command_start_acquisition(const struct sr_dev_inst *sdi)
-{
-	struct sr_usb_dev_inst *usb;
-	struct dslogic_mode mode;
-	int ret;
-
-	mode.flags = DS_START_FLAGS_MODE_LA | DS_START_FLAGS_SAMPLE_WIDE;
-	mode.sample_delay_h = mode.sample_delay_l = 0;
-
-	usb = sdi->conn;
-	ret = libusb_control_transfer(usb->devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
-			LIBUSB_ENDPOINT_OUT, DS_CMD_START, 0x0000, 0x0000,
-			(unsigned char *)&mode, sizeof(mode), USB_TIMEOUT);
-	if (ret < 0) {
-		sr_err("Failed to send start command: %s.", libusb_error_name(ret));
-		return SR_ERR;
-	}
-
-	return SR_OK;
-}
-
-static int command_stop_acquisition(const struct sr_dev_inst *sdi)
-{
-	struct sr_usb_dev_inst *usb;
-    struct ctl_wr_cmd wr_cmd;
-    struct dev_context *devc;
-	int ret;
-
-	devc = sdi->priv;
-    usb = sdi->conn;
-
-    if (!devc->abort) {
-        devc->abort = TRUE;
-        dslogic_wr_reg(sdi, CTR0_ADDR, bmFORCE_RDY);
-    } else if (devc->status == DSL_FINISH) {
-        /* Stop GPIF acquisition */
-        wr_cmd.header.dest = DSL_CTL_STOP;
-        wr_cmd.header.size = 0;
-        if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK)
-            sr_err("%s: Sent acquisition stop command failed!", __func__);
-        else
-            sr_info("%s: Sent acquisition stop command!", __func__);
-    }
-
-	return SR_OK;
 }
 
 SR_PRIV int dslogic_fpga_firmware_upload(const struct sr_dev_inst *sdi)
@@ -676,28 +734,6 @@ SR_PRIV int dslogic_fpga_firmware_upload(const struct sr_dev_inst *sdi)
 
     sr_dbg("FPGA configure done");
     return SR_OK;
-}
-
-static unsigned int enabled_channel_count(const struct sr_dev_inst *sdi)
-{
-	unsigned int count = 0;
-	for (const GSList *l = sdi->channels; l; l = l->next) {
-		const struct sr_channel *const probe = (struct sr_channel *)l->data;
-		if (probe->enabled)
-			count++;
-	}
-	return count;
-}
-
-static uint16_t enabled_channel_mask(const struct sr_dev_inst *sdi)
-{
-	unsigned int mask = 0;
-	for (const GSList *l = sdi->channels; l; l = l->next) {
-		const struct sr_channel *const probe = (struct sr_channel *)l->data;
-		if (probe->enabled)
-			mask |= 1 << probe->index;
-	}
-	return mask;
 }
 
 /*
@@ -1360,8 +1396,12 @@ static void send_data(struct sr_dev_inst *sdi,
 
 static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 {
-	struct sr_dev_inst *const sdi = transfer->user_data;
+    struct sr_dev_inst *const sdi = transfer->user_data;
 	struct dev_context *const devc = sdi->priv;
+    
+//     struct dev_context *devc = transfer->user_data;
+//     struct sr_dev_inst *sdi = devc->cb_data;
+    
 	const size_t channel_count = enabled_channel_count(sdi);
 	const uint16_t channel_mask = enabled_channel_mask(sdi);
 	const unsigned int cur_sample_count = DSLOGIC_ATOMIC_SAMPLES *
@@ -1467,64 +1507,179 @@ static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 		resubmit_transfer(transfer);
 }
 
-static int receive_data(int fd, int revents, void *cb_data)
+static int receive_header(struct libusb_transfer *transfer)
 {
-	struct timeval tv;
-	struct drv_context *drvc;
+// 	struct timeval tv;
+// 	struct drv_context *drvc;
+// 
+// 	(void)fd;
+// 	(void)revents;
+// 
+// 	drvc = (struct drv_context *)cb_data;
+// 
+// 	tv.tv_sec = tv.tv_usec = 0;
+// 	libusb_handle_events_timeout(drvc->sr_ctx->libusb_ctx, &tv);
+// 
+// 	return TRUE;
+    
+    struct dev_context *devc;
+    struct sr_datafeed_packet packet;
+    struct dslogic_trigger_pos *trigger_pos;
+    const struct sr_dev_inst *sdi;
+    uint64_t remain_cnt;
 
-	(void)fd;
-	(void)revents;
+//     packet.status = SR_PKT_OK;
+    devc = transfer->user_data;
+    sdi = devc->cb_data;
+    trigger_pos = (struct ds_trigger_pos *)transfer->buffer;
 
-	drvc = (struct drv_context *)cb_data;
+    if (devc->status != DSL_ABORT)
+        devc->status = DSL_ERROR;
+    if (!devc->abort && transfer->status == LIBUSB_TRANSFER_COMPLETED &&
+        trigger_pos->check_id == TRIG_CHECKID) {
+        sr_info("%" PRIu64 ": receive_trigger_pos(): status %d; timeout %d; received %d bytes.",
+            g_get_monotonic_time(), transfer->status, transfer->timeout, transfer->actual_length);
+        remain_cnt = trigger_pos->remain_cnt_h;
+        remain_cnt = (remain_cnt << 32) + trigger_pos->remain_cnt_l;
+        if (transfer->actual_length == dsl_header_size(devc)) {
+            if (devc->stream || remain_cnt < devc->limit_samples) {
+                if ((!devc->stream || (devc->status == DSL_ABORT))) {
+                    devc->actual_samples = (devc->limit_samples - remain_cnt) & ~SAMPLES_ALIGN;
+                    devc->actual_bytes = devc->actual_samples / DSLOGIC_ATOMIC_SAMPLES * dsl_en_ch_num(sdi) * DSLOGIC_ATOMIC_SIZE;
+                    devc->actual_samples = devc->actual_bytes / dsl_en_ch_num(sdi) * 8;
+                }
 
-	tv.tv_sec = tv.tv_usec = 0;
-	libusb_handle_events_timeout(drvc->sr_ctx->libusb_ctx, &tv);
+                packet.type = SR_DF_TRIGGER;
+                packet.payload = trigger_pos;
+                sr_session_send(sdi, &packet);
 
-	return TRUE;
+                devc->status = DSL_DATA;
+            }
+        }
+    } else if (!devc->abort) {
+        sr_err("%s: trigger packet data error.", __func__);
+        packet.type = SR_DF_TRIGGER;
+        packet.payload = trigger_pos;
+//         packet.status = SR_PKT_DATA_ERROR;
+        sr_session_send(sdi, &packet);
+    }
+
+    free_transfer(transfer);
 }
 
-static size_t to_bytes_per_ms(const struct sr_dev_inst *sdi)
+static int command_start_acquisition(const struct sr_dev_inst *sdi)
 {
-	const struct dev_context *const devc = sdi->priv;
-	const size_t ch_count = enabled_channel_count(sdi);
+//     struct sr_usb_dev_inst *usb;
+// 	struct dslogic_mode mode;
+// 	int ret;
+    
+    struct dev_context *devc;
+    struct sr_usb_dev_inst *usb;
+    struct libusb_transfer *transfer;
+    unsigned int i, num_transfers;
+    int ret;
+    unsigned char *buf;
+    size_t size;
+    struct dslogic_trigger_pos *trigger_pos;
 
-	if (devc->continuous_mode)
-		return (devc->cur_samplerate * ch_count) / (1000 * 8);
+    devc = sdi->priv;
+    usb = sdi->conn;
 
+// 	mode.flags = DS_START_FLAGS_MODE_LA | DS_START_FLAGS_SAMPLE_WIDE;
+// 	mode.sample_delay_h = mode.sample_delay_l = 0;
+// 
+// 	usb = sdi->conn;
+// 	ret = libusb_control_transfer(usb->devhdl, LIBUSB_REQUEST_TYPE_VENDOR |
+// 			LIBUSB_ENDPOINT_OUT, DS_CMD_START, 0x0000, 0x0000,
+// 			(unsigned char *)&mode, sizeof(mode), USB_TIMEOUT);
+// 	if (ret < 0) {
+// 		sr_err("Failed to send start command: %s.", libusb_error_name(ret));
+// 		return SR_ERR;
+// 	}
+// 
+// 	return SR_OK;
+    
+    num_transfers = get_number_of_transfers(sdi);
+    size = get_buffer_size(sdi);
 
-	/* If we're in buffered mode, the transfer rate is not so important,
-	 * but we expect to get at least 10% of the high-speed USB bandwidth.
-	 */
-	return 35000000 / (1000 * 10);
+    /* trigger packet transfer */
+    if (!(trigger_pos = g_try_malloc0(dsl_header_size(devc)))) {
+        sr_err("%s: USB trigger_pos buffer malloc failed.", __func__);
+        return SR_ERR_MALLOC;
+    }
+
+    devc->transfers = g_try_malloc0(sizeof(*devc->transfers) * (num_transfers + 1));
+    if (!devc->transfers) {
+        sr_err("%s: USB transfer malloc failed.", __func__);
+        return SR_ERR_MALLOC;
+    }
+    transfer = libusb_alloc_transfer(0);
+    libusb_fill_bulk_transfer(transfer, usb->devhdl,
+            6 | LIBUSB_ENDPOINT_IN, (unsigned char *)trigger_pos, dsl_header_size(devc),
+            (libusb_transfer_cb_fn)receive_header, devc, 0);
+    if ((ret = libusb_submit_transfer(transfer)) != 0) {
+        sr_err("%s: Failed to submit trigger_pos transfer: %s.",
+               __func__, libusb_error_name(ret));
+        libusb_free_transfer(transfer);
+        g_free(trigger_pos);
+        devc->status = DSL_ERROR;
+        return SR_ERR;
+    } else {
+        devc->num_transfers++;
+        devc->transfers[0] = transfer;
+        devc->submitted_transfers++;
+    }
+
+    /* data packet transfer */
+    for (i = 1; i <= num_transfers; i++) {
+        if (!(buf = g_try_malloc(size))) {
+            sr_err("%s: USB transfer buffer malloc failed.", __func__);
+            return SR_ERR_MALLOC;
+        }
+        transfer = libusb_alloc_transfer(0);
+        libusb_fill_bulk_transfer(transfer, usb->devhdl,
+                6 | LIBUSB_ENDPOINT_IN, buf, size,
+                (libusb_transfer_cb_fn)receive_transfer, devc, 0);
+        if ((ret = libusb_submit_transfer(transfer)) != 0) {
+            sr_err("%s: Failed to submit transfer: %s.",
+                   __func__, libusb_error_name(ret));
+            libusb_free_transfer(transfer);
+            g_free(buf);
+            devc->status = DSL_ERROR;
+            devc->abort = TRUE;
+            return SR_ERR;
+        }
+        devc->transfers[i] = transfer;
+        devc->submitted_transfers++;
+        devc->num_transfers++;
+    }
+
 }
 
-static size_t get_buffer_size(const struct sr_dev_inst *sdi)
+static int command_stop_acquisition(const struct sr_dev_inst *sdi)
 {
-	/*
-	 * The buffer should be large enough to hold 10ms of data and
-	 * a multiple of the size of a data atom.
-	 */
-	const size_t block_size = enabled_channel_count(sdi) * 512;
-	const size_t s = 10 * to_bytes_per_ms(sdi);
-	if (!block_size)
-		return s;
-	return ((s + block_size - 1) / block_size) * block_size;
-}
+	struct sr_usb_dev_inst *usb;
+    struct ctl_wr_cmd wr_cmd;
+    struct dev_context *devc;
+	int ret;
 
-static unsigned int get_number_of_transfers(const struct sr_dev_inst *sdi)
-{
-	/* Total buffer size should be able to hold about 100ms of data. */
-	const unsigned int s = get_buffer_size(sdi);
-	const unsigned int n = (100 * to_bytes_per_ms(sdi) + s - 1) / s;
-	return (n > NUM_SIMUL_TRANSFERS) ? NUM_SIMUL_TRANSFERS : n;
-}
+	devc = sdi->priv;
+    usb = sdi->conn;
 
-static unsigned int get_timeout(const struct sr_dev_inst *sdi)
-{
-	const size_t total_size = get_buffer_size(sdi) *
-		get_number_of_transfers(sdi);
-	const unsigned int timeout = total_size / to_bytes_per_ms(sdi);
-	return timeout + timeout / 4; /* Leave a headroom of 25% percent. */
+    if (!devc->abort) {
+        devc->abort = TRUE;
+        dslogic_wr_reg(sdi, CTR0_ADDR, bmFORCE_RDY);
+    } else if (devc->status == DSL_FINISH) {
+        /* Stop GPIF acquisition */
+        wr_cmd.header.dest = DSL_CTL_STOP;
+        wr_cmd.header.size = 0;
+        if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK)
+            sr_err("%s: Sent acquisition stop command failed!", __func__);
+        else
+            sr_info("%s: Sent acquisition stop command!", __func__);
+    }
+
+	return SR_OK;
 }
 
 static int start_transfers(const struct sr_dev_inst *sdi)
@@ -1573,7 +1728,7 @@ static int start_transfers(const struct sr_dev_inst *sdi)
 		transfer = libusb_alloc_transfer(0);
 		libusb_fill_bulk_transfer(transfer, usb->devhdl,
 				6 | LIBUSB_ENDPOINT_IN, buf, size,
-				receive_transfer, (void *)sdi, timeout);
+				trigger_receive, (void *)sdi, timeout);
 		sr_info("submitting transfer: %d", i);
 		if ((ret = libusb_submit_transfer(transfer)) != 0) {
 			sr_err("Failed to submit transfer: %s.",
@@ -1616,7 +1771,54 @@ static void LIBUSB_CALL trigger_receive(struct libusb_transfer *transfer)
 		g_free(tpos);
 		start_transfers(sdi);
 	}
-	libusb_free_transfer(transfer);
+	libusb_free_transfer(transfer);    
+    
+//     const struct sr_dev_inst *sdi;
+//     struct dslogic_trigger_pos *tpos;
+//     struct dev_context *devc;
+//     
+//     struct sr_datafeed_packet packet;
+//     uint64_t remain_cnt;
+// 
+//     packet.status = SR_PKT_OK;
+//     devc = transfer->user_data;
+//     sdi = devc->cb_data;
+//     trigger_pos = (struct ds_trigger_pos *)transfer->buffer;
+// 
+//     if (devc->status != DSL_ABORT)
+//         devc->status = DSL_ERROR;
+//     if (!devc->abort && transfer->status == LIBUSB_TRANSFER_COMPLETED &&
+//         trigger_pos->check_id == TRIG_CHECKID) {
+//         sr_info("%" PRIu64 ": receive_trigger_pos(): status %d; timeout %d; received %d bytes.",
+//             g_get_monotonic_time(), transfer->status, transfer->timeout, transfer->actual_length);
+//         remain_cnt = trigger_pos->remain_cnt_h;
+//         remain_cnt = (remain_cnt << 32) + trigger_pos->remain_cnt_l;
+//         if (transfer->actual_length == dsl_header_size(devc)) {
+//             if (sdi->mode != LOGIC ||
+//                 devc->stream ||
+//                 remain_cnt < devc->limit_samples) {
+//                 if (sdi->mode == LOGIC && (!devc->stream || (devc->status == DSL_ABORT))) {
+//                     devc->actual_samples = (devc->limit_samples - remain_cnt) & ~SAMPLES_ALIGN;
+//                     devc->actual_bytes = devc->actual_samples / DSLOGIC_ATOMIC_SAMPLES * dsl_en_ch_num(sdi) * DSLOGIC_ATOMIC_SIZE;
+//                     devc->actual_samples = devc->actual_bytes / dsl_en_ch_num(sdi) * 8;
+//                 }
+// 
+//                 packet.type = SR_DF_TRIGGER;
+//                 packet.payload = trigger_pos;
+//                 sr_session_send(sdi, &packet);
+// 
+//                 devc->status = DSL_DATA;
+//             }
+//         }
+//     } else if (!devc->abort) {
+//         sr_err("%s: trigger packet data error.", __func__);
+//         packet.type = SR_DF_TRIGGER;
+//         packet.payload = trigger_pos;
+//         packet.status = SR_PKT_DATA_ERROR;
+//         sr_session_send(sdi, &packet);
+//     }
+// 
+//     free_transfer(transfer);
 }
 
 SR_PRIV int dslogic_acquisition_start(const struct sr_dev_inst *sdi)
@@ -1629,7 +1831,9 @@ SR_PRIV int dslogic_acquisition_start(const struct sr_dev_inst *sdi)
 	struct sr_usb_dev_inst *usb;
 	struct dslogic_trigger_pos *tpos;
 	struct libusb_transfer *transfer;
-	int ret;
+    struct ctl_wr_cmd wr_cmd;
+    struct libusb_pollfd **lupfd;
+	int ret, i;
 
 	di = sdi->driver;
 	drvc = di->context;
@@ -1641,7 +1845,7 @@ SR_PRIV int dslogic_acquisition_start(const struct sr_dev_inst *sdi)
 	devc->empty_transfer_count = 0;
 	devc->acq_aborted = FALSE;
 
-	usb_source_add(sdi->session, devc->ctx, timeout, receive_data, drvc);
+// 	usb_source_add(sdi->session, devc->ctx, timeout, receive_data, drvc);
 
 	if ((ret = command_stop_acquisition(sdi)) != SR_OK)
 		return ret;
@@ -1652,27 +1856,48 @@ SR_PRIV int dslogic_acquisition_start(const struct sr_dev_inst *sdi)
 	if ((ret = command_start_acquisition(sdi)) != SR_OK)
 		return ret;
 
-	sr_dbg("Getting trigger.");
-	tpos = g_malloc(sizeof(struct dslogic_trigger_pos));
-	transfer = libusb_alloc_transfer(0);
-	libusb_fill_bulk_transfer(transfer, usb->devhdl, 6 | LIBUSB_ENDPOINT_IN,
-			(unsigned char *)tpos, sizeof(struct dslogic_trigger_pos),
-			trigger_receive, (void *)sdi, 0);
-	if ((ret = libusb_submit_transfer(transfer)) < 0) {
-		sr_err("Failed to request trigger: %s.", libusb_error_name(ret));
-		libusb_free_transfer(transfer);
-		g_free(tpos);
-		return SR_ERR;
-	}
+// 	sr_dbg("Getting trigger.");
+// 	tpos = g_malloc(sizeof(struct dslogic_trigger_pos));
+// 	transfer = libusb_alloc_transfer(0);
+// 	libusb_fill_bulk_transfer(transfer, usb->devhdl, 6 | LIBUSB_ENDPOINT_IN,
+// 			(unsigned char *)tpos, sizeof(struct dslogic_trigger_pos),
+// 			trigger_receive, (void *)sdi, 0);
+// 	if ((ret = libusb_submit_transfer(transfer)) < 0) {
+// 		sr_err("Failed to request trigger: %s.", libusb_error_name(ret));
+// 		libusb_free_transfer(transfer);
+// 		g_free(tpos);
+// 		return SR_ERR;
+// 	}
+// 
+// 	devc->transfers = g_try_malloc0(sizeof(*devc->transfers));
+// 	if (!devc->transfers) {
+// 		sr_err("USB trigger_pos transfer malloc failed.");
+// 		return SR_ERR_MALLOC;
+// 	}
+// 	devc->num_transfers = 1;
+// 	devc->submitted_transfers++;
+// 	devc->transfers[0] = transfer;
+    
+    /* setup callback function for data transfer */
+//     lupfd = libusb_get_pollfds(drvc->sr_ctx->libusb_ctx);
+//     for (i = 0; lupfd[i]; i++);
+//     if (!(devc->usbfd = g_try_malloc(sizeof(struct libusb_pollfd) * (i + 1))))
+//     	return SR_ERR;
+//     for (i = 0; lupfd[i]; i++) {
+//         sr_source_add(lupfd[i]->fd, lupfd[i]->events, dsl_get_timeout(sdi), receive_data, sdi);
+//         devc->usbfd[i] = lupfd[i]->fd;
+//     }
+//     devc->usbfd[i] = -1;
+//     free(lupfd);
 
-	devc->transfers = g_try_malloc0(sizeof(*devc->transfers));
-	if (!devc->transfers) {
-		sr_err("USB trigger_pos transfer malloc failed.");
-		return SR_ERR_MALLOC;
-	}
-	devc->num_transfers = 1;
-	devc->submitted_transfers++;
-	devc->transfers[0] = transfer;
+    wr_cmd.header.dest = DSL_CTL_START;
+    wr_cmd.header.size = 0;
+    if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK) {
+        devc->status = DSL_ERROR;
+        devc->abort = TRUE;
+        return ret;
+    }
+    devc->status = DSL_START;
 
 	return ret;
 }

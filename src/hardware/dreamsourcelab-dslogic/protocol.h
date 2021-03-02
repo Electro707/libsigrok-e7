@@ -318,7 +318,7 @@ struct dslogic_trigger_pos {
 	uint32_t remain_cnt_l;
 	uint32_t remain_cnt_h;
 	uint32_t status;
-	uint8_t first_block[488];
+	//uint8_t first_block[488];
 };
 
 struct dslogic_channels {
@@ -390,6 +390,7 @@ struct dev_context {
 	uint64_t cur_samplerate;
 	uint64_t limit_samples;
 	uint64_t capture_ratio;
+    uint64_t actual_bytes;
 
 	gboolean acq_aborted;
 
@@ -397,8 +398,6 @@ struct dev_context {
 	int submitted_transfers;
 	int empty_transfer_count;
 
-	unsigned int num_transfers;
-	struct libusb_transfer **transfers;
 	struct sr_context *ctx;
 
 	uint16_t *deinterleave_buffer;
@@ -420,6 +419,14 @@ struct dev_context {
     uint64_t actual_samples;
     uint16_t unit_pitch;
     uint16_t th_level;
+    
+    void *cb_data;
+	unsigned int num_transfers;
+	struct libusb_transfer **transfers;
+	int *usbfd;
+    
+    int trf_completed;
+    int empty_poll_count;
     
     gboolean abort;
     int status;
