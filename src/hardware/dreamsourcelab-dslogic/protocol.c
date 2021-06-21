@@ -140,10 +140,6 @@
 #define EXT_TEST_BIT 14
 #define INT_TEST_BIT 15
 
-#define TriggerStages 16
-#define TriggerProbes 16
-#define MaxTriggerProbes 32
-
 /*
  * packet content check
  */
@@ -487,6 +483,14 @@ static int dsl_header_size(const struct dev_context *devc)
     else
         size = SR_B(512);
     return size;
+}
+
+static unsigned int get_total_buffer_time(const struct dev_context *devc)
+{
+    if (devc->profile->usb_speed == LIBUSB_SPEED_SUPER)
+        return 40;
+    else
+        return 100;
 }
 
 static unsigned int get_number_of_transfers(const struct sr_dev_inst *sdi)
@@ -855,12 +859,12 @@ static int fpga_configure(const struct sr_dev_inst *sdi)
 
 	sr_dbg("Configuring FPGA.");
     
-    if (!(trigger = sr_session_trigger_get(sdi->session))) {
-		sr_dbg("No session trigger found");
-		return false;
-	}
+//     if (!(trigger = sr_session_trigger_get(sdi->session))) {
+// 		sr_dbg("No session trigger found");
+// 		return false;
+// 	}
 
-	cfg.sync = 0xf5a5f5a5;
+    cfg.sync = 0xf5a5f5a5;
     cfg.mode_header = 0x0001;
     cfg.divider_header = 0x0102;
     cfg.count_header = 0x0302;
@@ -912,14 +916,14 @@ static int fpga_configure(const struct sr_dev_inst *sdi)
 
     // trigger position
     // must be align to minimum parallel bits
-//     trigger_point = (devc->capture_ratio * devc->limit_samples) / 100;
-//     tmp_u32 = max(trigger_point, DSLOGIC_ATOMIC_SAMPLES);
-//     if (devc->stream)
-//         tmp_u32 = min(tmp_u32, dsl_channel_depth(sdi) * 10 / 100);
-//     else
-//         tmp_u32 = min(tmp_u32, dsl_channel_depth(sdi) * DS_MAX_TRIG_PERCENT / 100);
-//     cfg.tpos_l = tmp_u32 & DSLOGIC_ATOMIC_MASK;
-//     cfg.tpos_h = tmp_u32 >> 16;
+    trigger_point = (devc->capture_ratio * devc->limit_samples) / 100;
+    tmp_u32 = max(trigger_point, DSLOGIC_ATOMIC_SAMPLES);
+    if (devc->stream)
+        tmp_u32 = min(tmp_u32, dsl_channel_depth(sdi) * 10 / 100);
+    else
+        tmp_u32 = min(tmp_u32, dsl_channel_depth(sdi) * DS_MAX_TRIG_PERCENT / 100);
+    cfg.tpos_l = tmp_u32 & DSLOGIC_ATOMIC_MASK;
+    cfg.tpos_h = tmp_u32 >> 16;
     
     trigger_point = (devc->capture_ratio * devc->limit_samples) / 100;
 	if (trigger_point < DSLOGIC_ATOMIC_SAMPLES) {
@@ -963,28 +967,28 @@ static int fpga_configure(const struct sr_dev_inst *sdi)
     // trigger advanced configuration
     if (1) {
             //TODO: What the fuck is this shit. I shit you not this is directly from dsview
-//         qutr_trig = !(devc->profile->dev_caps.feature_caps & CAPS_FEATURE_USB30) && (cfg.mode & (1 << QUAR_MODE_BIT));
-//         half_trig = (!(devc->profile->dev_caps.feature_caps & CAPS_FEATURE_USB30) && cfg.mode & (1 << HALF_MODE_BIT)) ||
-//                     ((devc->profile->dev_caps.feature_caps & CAPS_FEATURE_USB30) && cfg.mode & (1 << QUAR_MODE_BIT));
-// 
-//         cfg.trig_mask0[0] = ds_trigger_get_mask0(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
-//         cfg.trig_mask1[0] = ds_trigger_get_mask1(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
-//         cfg.trig_value0[0] = ds_trigger_get_value0(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
-//         cfg.trig_value1[0] = ds_trigger_get_value1(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
-//         cfg.trig_edge0[0] = ds_trigger_get_edge0(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
-//         cfg.trig_edge1[0] = ds_trigger_get_edge1(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
-// 
-//         setting_ext32.trig_mask0[0] = ds_trigger_get_mask0(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
-//         setting_ext32.trig_mask1[0] = ds_trigger_get_mask1(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
-//         setting_ext32.trig_value0[0] = ds_trigger_get_value0(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
-//         setting_ext32.trig_value1[0] = ds_trigger_get_value1(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
-//         setting_ext32.trig_edge0[0] = ds_trigger_get_edge0(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
-//         setting_ext32.trig_edge1[0] = ds_trigger_get_edge1(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+        qutr_trig = !(devc->profile->dev_caps.feature_caps & CAPS_FEATURE_USB30) && (cfg.mode & (1 << QUAR_MODE_BIT));
+        half_trig = (!(devc->profile->dev_caps.feature_caps & CAPS_FEATURE_USB30) && cfg.mode & (1 << HALF_MODE_BIT)) ||
+                    ((devc->profile->dev_caps.feature_caps & CAPS_FEATURE_USB30) && cfg.mode & (1 << QUAR_MODE_BIT));
 
-//         cfg.trig_logic0[0] = (trigger->trigger_logic[TriggerStages] << 1) + trigger->trigger0_inv[TriggerStages];
-//         cfg.trig_logic1[0] = (trigger->trigger_logic[TriggerStages] << 1) + trigger->trigger1_inv[TriggerStages];
+        cfg.trig_mask0[0] = ds_trigger_get_mask0(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+        cfg.trig_mask1[0] = ds_trigger_get_mask1(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+        cfg.trig_value0[0] = ds_trigger_get_value0(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+        cfg.trig_value1[0] = ds_trigger_get_value1(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+        cfg.trig_edge0[0] = ds_trigger_get_edge0(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+        cfg.trig_edge1[0] = ds_trigger_get_edge1(TriggerStages, TriggerProbes-1, 0, qutr_trig, half_trig);
+        
+        setting_ext32.trig_mask0[0] = ds_trigger_get_mask0(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+        setting_ext32.trig_mask1[0] = ds_trigger_get_mask1(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+        setting_ext32.trig_value0[0] = ds_trigger_get_value0(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+        setting_ext32.trig_value1[0] = ds_trigger_get_value1(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+        setting_ext32.trig_edge0[0] = ds_trigger_get_edge0(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
+        setting_ext32.trig_edge1[0] = ds_trigger_get_edge1(TriggerStages, 2*TriggerProbes-1, TriggerProbes, qutr_trig, half_trig);
 
-//         cfg.trig_count[0] = trigger->trigger0_count[TriggerStages];
+        cfg.trig_logic0[0] = (trigger->trigger_logic[TriggerStages] << 1) + trigger->trigger0_inv[TriggerStages];
+        cfg.trig_logic1[0] = (trigger->trigger_logic[TriggerStages] << 1) + trigger->trigger1_inv[TriggerStages];
+
+        cfg.trig_count[0] = trigger->trigger0_count[TriggerStages];
 
         for (i = 1; i < NUM_TRIGGER_STAGES; i++) {
             cfg.trig_mask0[i] = 0xffff;
@@ -1545,8 +1549,8 @@ static int receive_header(struct libusb_transfer *transfer)
             if (devc->stream || remain_cnt < devc->limit_samples) {
                 if ((!devc->stream || (devc->status == DSL_ABORT))) {
                     devc->actual_samples = (devc->limit_samples - remain_cnt) & ~SAMPLES_ALIGN;
-                    devc->actual_bytes = devc->actual_samples / DSLOGIC_ATOMIC_SAMPLES * dsl_en_ch_num(sdi) * DSLOGIC_ATOMIC_SIZE;
-                    devc->actual_samples = devc->actual_bytes / dsl_en_ch_num(sdi) * 8;
+                    devc->actual_bytes = devc->actual_samples / DSLOGIC_ATOMIC_SAMPLES * enabled_channel_count(sdi) * DSLOGIC_ATOMIC_SIZE;
+                    devc->actual_samples = devc->actual_bytes / enabled_channel_count(sdi) * 8;
                 }
 
                 packet.type = SR_DF_TRIGGER;
@@ -1598,6 +1602,8 @@ static int command_start_acquisition(const struct sr_dev_inst *sdi)
 // 	}
 // 
 // 	return SR_OK;
+    
+    sr_dbg("Starting Transfer");
     
     num_transfers = get_number_of_transfers(sdi);
     size = get_buffer_size(sdi);
@@ -1653,6 +1659,8 @@ static int command_start_acquisition(const struct sr_dev_inst *sdi)
         devc->submitted_transfers++;
         devc->num_transfers++;
     }
+    
+    return SR_OK;
 
 }
 
@@ -1742,7 +1750,7 @@ static int start_transfers(const struct sr_dev_inst *sdi)
 		devc->submitted_transfers++;
 	}
 
-	std_session_send_df_header(sdi);
+// 	std_session_send_df_header(sdi);
 
 	return SR_OK;
 }
@@ -1898,6 +1906,10 @@ SR_PRIV int dslogic_acquisition_start(const struct sr_dev_inst *sdi)
         return ret;
     }
     devc->status = DSL_START;
+    
+    /* Send header packet to the session bus. */
+    //std_session_send_df_header(cb_data, LOG_PREFIX);
+//     std_session_send_df_header(sdi, LOG_PREFIX);
 
 	return ret;
 }

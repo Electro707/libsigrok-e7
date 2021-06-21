@@ -29,6 +29,8 @@
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
 
+#include "dslogic_extra.h"
+
 #define LOG_PREFIX "dreamsourcelab-dslogic"
 
 #define USB_INTERFACE		0
@@ -89,6 +91,10 @@
 // auto tunning vgain
 #define CAPS_FEATURE_AUTO_VGAIN (1 << 12)
 /* end */
+
+#define TriggerStages 16
+#define TriggerProbes 16
+#define MaxTriggerProbes 32
 
 #define DSLOGIC_FPGA_FIRMWARE_5V "dreamsourcelab-dslogic-fpga-5v.fw"
 #define DSLOGIC_FPGA_FIRMWARE_3V3 "dreamsourcelab-dslogic-fpga-3v3.fw"
