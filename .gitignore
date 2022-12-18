@@ -75,5 +75,3 @@ stamp-h?
 /tests/*.log
 /tests/*.trs
 /tests/main
-
-/build-dev
