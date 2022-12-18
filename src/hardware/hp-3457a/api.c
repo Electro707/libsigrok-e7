@@ -52,11 +52,8 @@ static int create_front_channel(struct sr_dev_inst *sdi, int chan_idx)
 				 TRUE, "Front");
 	channel->priv = chanc;
 
-	front = g_malloc0(sizeof(*front));
-	front->name = g_strdup("Front");
+	front = sr_channel_group_new(sdi, "Front", NULL);
 	front->channels = g_slist_append(front->channels, channel);
-
-	sdi->channel_groups = g_slist_append(sdi->channel_groups, front);
 
 	return chan_idx;
 }
@@ -74,10 +71,7 @@ static int create_rear_channels(struct sr_dev_inst *sdi, int chan_idx,
 	if (!card)
 		return chan_idx;
 
-	group = g_malloc0(sizeof(*group));
-	group->priv = NULL;
-	group->name = g_strdup(card->cg_name);
-	sdi->channel_groups = g_slist_append(sdi->channel_groups, group);
+	group = sr_channel_group_new(sdi, card->cg_name, NULL);
 
 	for (i = 0; i < card->num_channels; i++) {
 
@@ -128,6 +122,14 @@ static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
 	struct dev_context *devc;
 
 	/*
+	 * The device cannot get identified by means of SCPI queries.
+	 * Neither shall non-SCPI requests get emitted before reliable
+	 * identification of the device. Assume that we only get here
+	 * when user specs led us to believe it's safe to communicate
+	 * to the expected kind of device.
+	 */
+
+	/*
 	 * This command ensures we receive an EOI after every response, so that
 	 * we don't wait the entire timeout after the response is received.
 	 */
@@ -138,13 +140,15 @@ static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
 	if ((ret != SR_OK) || !response)
 		return NULL;
 
-	if (strcmp(response, "HP3457A"))
+	if (strcmp(response, "HP3457A") != 0) {
+		g_free(response);
 		return NULL;
+	}
 
 	g_free(response);
 
-	devc = g_malloc0(sizeof(struct dev_context));
-	sdi = g_malloc0(sizeof(struct sr_dev_inst));
+	devc = g_malloc0(sizeof(*devc));
+	sdi = g_malloc0(sizeof(*sdi));
 	sdi->vendor = g_strdup("Hewlett-Packard");
 	sdi->model = g_strdup("3457A");
 	sdi->version = get_revision(scpi);
@@ -168,6 +172,14 @@ static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
+	const char *conn;
+
+	/* Only scan for a device when conn= was specified. */
+	conn = NULL;
+	(void)sr_serial_extract_options(options, &conn, NULL);
+	if (!conn)
+		return NULL;
+
 	return sr_scpi_scan(di->context, options, probe_device);
 }
 

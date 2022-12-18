@@ -330,7 +330,17 @@ static const uint64_t vdivs[][2] = {
 	{ 2, 1 },
 	{ 5, 1 },
 	{ 10, 1 },
+	{ 20, 1 },
+	{ 50, 1 },
 };
+/*
+ * It feels a little hacky to use a single table yet use different item
+ * count values here. But it simplifies maintenance, reduces redundancy
+ * by avoiding several vdivs[] table versions of mostly identical content,
+ * still references which declare models' capabilities remain readable.
+ */
+#define VDIVS_COUNT_UPTO_10V	(ARRAY_SIZE(vdivs) - 2)
+#define VDIVS_COUNT_UPTO_50V	(ARRAY_SIZE(vdivs))
 
 static const char *scope_analog_channel_names[] = {
 	"CH1", "CH2", "CH3", "CH4",
@@ -377,7 +387,7 @@ static struct scope_config scope_models[] = {
 		.num_timebases = ARRAY_SIZE(timebases_hmo_compact),
 
 		.vdivs = &vdivs,
-		.num_vdivs = ARRAY_SIZE(vdivs),
+		.num_vdivs = VDIVS_COUNT_UPTO_10V,
 
 		.num_ydivs = 8,
 
@@ -418,7 +428,7 @@ static struct scope_config scope_models[] = {
 		.num_timebases = ARRAY_SIZE(timebases),
 
 		.vdivs = &vdivs,
-		.num_vdivs = ARRAY_SIZE(vdivs),
+		.num_vdivs = VDIVS_COUNT_UPTO_10V,
 
 		.num_ydivs = 8,
 
@@ -459,7 +469,7 @@ static struct scope_config scope_models[] = {
 		.num_timebases = ARRAY_SIZE(timebases),
 
 		.vdivs = &vdivs,
-		.num_vdivs = ARRAY_SIZE(vdivs),
+		.num_vdivs = VDIVS_COUNT_UPTO_10V,
 
 		.num_ydivs = 8,
 
@@ -500,7 +510,7 @@ static struct scope_config scope_models[] = {
 		.num_timebases = ARRAY_SIZE(timebases_hmo_compact),
 
 		.vdivs = &vdivs,
-		.num_vdivs = ARRAY_SIZE(vdivs),
+		.num_vdivs = VDIVS_COUNT_UPTO_10V,
 
 		.num_ydivs = 8,
 
@@ -540,7 +550,7 @@ static struct scope_config scope_models[] = {
 		.num_timebases = ARRAY_SIZE(timebases),
 
 		.vdivs = &vdivs,
-		.num_vdivs = ARRAY_SIZE(vdivs),
+		.num_vdivs = VDIVS_COUNT_UPTO_10V,
 
 		.num_ydivs = 8,
 
@@ -580,7 +590,7 @@ static struct scope_config scope_models[] = {
 		.num_timebases = ARRAY_SIZE(timebases),
 
 		.vdivs = &vdivs,
-		.num_vdivs = ARRAY_SIZE(vdivs),
+		.num_vdivs = VDIVS_COUNT_UPTO_50V,
 
 		.num_ydivs = 8,
 
@@ -620,7 +630,7 @@ static struct scope_config scope_models[] = {
 		.num_timebases = ARRAY_SIZE(timebases),
 
 		.vdivs = &vdivs,
-		.num_vdivs = ARRAY_SIZE(vdivs),
+		.num_vdivs = VDIVS_COUNT_UPTO_50V,
 
 		.num_ydivs = 8,
 
@@ -660,7 +670,7 @@ static struct scope_config scope_models[] = {
 		.num_timebases = ARRAY_SIZE(timebases),
 
 		.vdivs = &vdivs,
-		.num_vdivs = ARRAY_SIZE(vdivs),
+		.num_vdivs = VDIVS_COUNT_UPTO_10V,
 
 		.num_ydivs = 8,
 
@@ -700,7 +710,7 @@ static struct scope_config scope_models[] = {
 		.num_timebases = ARRAY_SIZE(timebases),
 
 		.vdivs = &vdivs,
-		.num_vdivs = ARRAY_SIZE(vdivs),
+		.num_vdivs = VDIVS_COUNT_UPTO_10V,
 
 		.num_ydivs = 8,
 
@@ -740,7 +750,7 @@ static struct scope_config scope_models[] = {
 		.num_timebases = ARRAY_SIZE(timebases),
 
 		.vdivs = &vdivs,
-		.num_vdivs = ARRAY_SIZE(vdivs),
+		.num_vdivs = VDIVS_COUNT_UPTO_10V,
 
 		.num_ydivs = 8,
 
@@ -896,7 +906,7 @@ static int analog_channel_state_get(struct sr_dev_inst *sdi,
 		if (sr_scpi_get_string(scpi, command, &tmp_str) != SR_OK)
 			return SR_ERR;
 
-		if (array_float_get(tmp_str, ARRAY_AND_SIZE(vdivs), &j) != SR_OK) {
+		if (array_float_get(tmp_str, *(config->vdivs), config->num_vdivs, &j) != SR_OK) {
 			g_free(tmp_str);
 			sr_err("Could not determine array index for vertical div scale.");
 			return SR_ERR;
@@ -1192,6 +1202,7 @@ SR_PRIV int hmo_init_device(struct sr_dev_inst *sdi)
 	unsigned int i, j, group;
 	struct sr_channel *ch;
 	struct dev_context *devc;
+	const char *cg_name;
 	int ret;
 
 	devc = sdi->priv;
@@ -1232,27 +1243,20 @@ SR_PRIV int hmo_init_device(struct sr_dev_inst *sdi)
 		ch = sr_channel_new(sdi, i, SR_CHANNEL_ANALOG, TRUE,
 			   (*scope_models[model_index].analog_names)[i]);
 
-		devc->analog_groups[i] = g_malloc0(sizeof(struct sr_channel_group));
-
-		devc->analog_groups[i]->name = g_strdup(
-			(char *)(*scope_models[model_index].analog_names)[i]);
+		cg_name = (*scope_models[model_index].analog_names)[i];
+		devc->analog_groups[i] = sr_channel_group_new(sdi, cg_name, NULL);
 		devc->analog_groups[i]->channels = g_slist_append(NULL, ch);
-
-		sdi->channel_groups = g_slist_append(sdi->channel_groups,
-						   devc->analog_groups[i]);
 	}
 
 	/* Add digital channel groups. */
 	ret = SR_OK;
 	for (i = 0; i < scope_models[model_index].digital_pods; i++) {
-		devc->digital_groups[i] = g_malloc0(sizeof(struct sr_channel_group));
+		devc->digital_groups[i] = sr_channel_group_new(sdi, NULL, NULL);
 		if (!devc->digital_groups[i]) {
 			ret = SR_ERR_MALLOC;
 			break;
 		}
 		devc->digital_groups[i]->name = g_strdup_printf("POD%d", i + 1);
-		sdi->channel_groups = g_slist_append(sdi->channel_groups,
-				   devc->digital_groups[i]);
 	}
 	if (ret != SR_OK)
 		return ret;
@@ -1380,8 +1384,6 @@ SR_PRIV int hmo_receive_data(int fd, int revents, void *cb_data)
 	(void)fd;
 	(void)revents;
 
-	data = NULL;
-
 	if (!(sdi = cb_data))
 		return TRUE;
 
@@ -1410,6 +1412,7 @@ SR_PRIV int hmo_receive_data(int fd, int revents, void *cb_data)
 	 */
 	switch (ch->type) {
 	case SR_CHANNEL_ANALOG:
+		data = NULL;
 		if (sr_scpi_get_block(sdi->conn, NULL, &data) != SR_OK) {
 			if (data)
 				g_byte_array_free(data, TRUE);
@@ -1442,6 +1445,7 @@ SR_PRIV int hmo_receive_data(int fd, int revents, void *cb_data)
 		data = NULL;
 		break;
 	case SR_CHANNEL_LOGIC:
+		data = NULL;
 		if (sr_scpi_get_block(sdi->conn, NULL, &data) != SR_OK) {
 			if (data)
 				g_byte_array_free(data, TRUE);

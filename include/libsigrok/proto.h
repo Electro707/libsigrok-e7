@@ -166,7 +166,7 @@ SR_API const char *sr_input_name_get(const struct sr_input_module *imod);
 SR_API const char *sr_input_description_get(const struct sr_input_module *imod);
 SR_API const char *const *sr_input_extensions_get(
 		const struct sr_input_module *imod);
-SR_API const struct sr_input_module *sr_input_find(char *id);
+SR_API const struct sr_input_module *sr_input_find(const char *id);
 SR_API const struct sr_option **sr_input_options_get(const struct sr_input_module *imod);
 SR_API void sr_input_options_free(const struct sr_option **options);
 SR_API struct sr_input *sr_input_new(const struct sr_input_module *imod,
@@ -253,6 +253,10 @@ SR_API uint64_t sr_parse_timestring(const char *timestring);
 SR_API gboolean sr_parse_boolstring(const char *boolstring);
 SR_API int sr_parse_period(const char *periodstr, uint64_t *p, uint64_t *q);
 SR_API int sr_parse_voltage(const char *voltstr, uint64_t *p, uint64_t *q);
+SR_API char **sr_parse_probe_names(const char *spec,
+	const char **dflt_names, size_t dflt_count,
+	size_t max_count, size_t *ret_count);
+SR_API void sr_free_probe_names(char **names);
 SR_API int sr_sprintf_ascii(char *buf, const char *format, ...);
 SR_API int sr_vsprintf_ascii(char *buf, const char *format, va_list args);
 SR_API int sr_snprintf_ascii(char *buf, size_t buf_size,

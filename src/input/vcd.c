@@ -205,15 +205,6 @@ static void free_channel(void *data)
 	g_free(vcd_ch);
 }
 
-/* TODO Drop the local decl when this has become a common helper. */
-void sr_channel_group_free(struct sr_channel_group *cg);
-
-/* Wrapper for GDestroyNotify compatibility. */
-static void cg_free(void *p)
-{
-	sr_channel_group_free(p);
-}
-
 /*
  * Another timestamp delta was observed, update statistics: Update the
  * sorted list of minimum values, and increment the occurance counter.
@@ -304,7 +295,7 @@ static void ts_stats_check_early(struct ts_stats *stats)
 		if (stats->total_ts_seen != cp->count)
 			continue;
 		/* First occurance of that timestamp count. Check the value. */
-		sr_dbg("TS early chk: total %" PRIu64 ", min delta %zu / %zu.",
+		sr_dbg("TS early chk: total %zu, min delta %" PRIu64 " / %" PRIu64 ".",
 			cp->count, seen_delta, check_delta);
 		if (check_delta < cp->delta)
 			return;
@@ -821,6 +812,7 @@ static int parse_header_var(struct context *inc, char *contents)
 	size_t length;
 	char *type, *size_txt, *id, *ref, *idx;
 	gboolean is_reg, is_wire, is_real, is_int;
+	gboolean is_str;
 	enum sr_channeltype ch_type;
 	size_t size, next_size;
 	struct vcd_channel *vcd_ch;
@@ -849,13 +841,21 @@ static int parse_header_var(struct context *inc, char *contents)
 	is_wire = g_strcmp0(type, "wire") == 0;
 	is_real = g_strcmp0(type, "real") == 0;
 	is_int = g_strcmp0(type, "integer") == 0;
+	is_str = g_strcmp0(type, "string") == 0;
 
 	if (is_reg || is_wire) {
 		ch_type = SR_CHANNEL_LOGIC;
 	} else if (is_real || is_int) {
 		ch_type = SR_CHANNEL_ANALOG;
+	} else if (is_str) {
+		sr_warn("Skipping id %s, name '%s%s', unsupported type '%s'.",
+			id, ref, idx ? idx : "", type);
+		inc->ignored_signals = g_slist_append(inc->ignored_signals,
+			g_strdup(id));
+		g_strfreev(parts);
+		return SR_OK;
 	} else {
-		sr_info("Unsupported signal type: '%s'", type);
+		sr_err("Unsupported signal type: '%s'", type);
 		g_strfreev(parts);
 		return SR_ERR_DATA;
 	}
@@ -1065,10 +1065,8 @@ static void create_channels(const struct sr_input *in,
 		if (vcd_ch->type != ch_type)
 			continue;
 		cg = NULL;
-		if (vcd_ch->size != 1) {
-			cg = g_malloc0(sizeof(*cg));
-			cg->name = g_strdup(vcd_ch->name);
-		}
+		if (vcd_ch->size != 1)
+			cg = sr_channel_group_new(sdi, vcd_ch->name, NULL);
 		for (size_idx = 0; size_idx < vcd_ch->size; size_idx++) {
 			ch_name = get_channel_name(vcd_ch, size_idx);
 			sr_dbg("sigrok channel idx %zu, name %s, type %s, en %d.",
@@ -1080,8 +1078,6 @@ static void create_channels(const struct sr_input *in,
 			if (cg)
 				cg->channels = g_slist_append(cg->channels, ch);
 		}
-		if (cg)
-			sdi->channel_groups = g_slist_append(sdi->channel_groups, cg);
 	}
 }
 
@@ -1126,7 +1122,7 @@ static void keep_header_for_reread(const struct sr_input *in)
 
 	inc = in->priv;
 
-	g_slist_free_full(inc->prev.sr_groups, cg_free);
+	g_slist_free_full(inc->prev.sr_groups, sr_channel_group_free_cb);
 	inc->prev.sr_groups = in->sdi->channel_groups;
 	in->sdi->channel_groups = NULL;
 
@@ -1165,7 +1161,7 @@ static gboolean check_header_in_reread(const struct sr_input *in)
 		return FALSE;
 	}
 
-	g_slist_free_full(in->sdi->channel_groups, cg_free);
+	g_slist_free_full(in->sdi->channel_groups, sr_channel_group_free_cb);
 	in->sdi->channel_groups = inc->prev.sr_groups;
 	inc->prev.sr_groups = NULL;
 
@@ -1180,7 +1176,7 @@ static gboolean check_header_in_reread(const struct sr_input *in)
 static int parse_header(const struct sr_input *in, GString *buf)
 {
 	struct context *inc;
-	gboolean status;
+	gboolean enddef_seen, header_valid;
 	char *name, *contents;
 	size_t size;
 	int ret;
@@ -1188,34 +1184,35 @@ static int parse_header(const struct sr_input *in, GString *buf)
 	inc = in->priv;
 
 	/* Parse sections until complete header was seen. */
-	status = FALSE;
+	enddef_seen = FALSE;
+	header_valid = TRUE;
 	name = contents = NULL;
 	inc->conv_bits.max_bits = 1;
 	while (parse_section(buf, &name, &contents)) {
 		sr_dbg("Section '%s', contents '%s'.", name, contents);
 
 		if (g_strcmp0(name, "enddefinitions") == 0) {
-			status = TRUE;
+			enddef_seen = TRUE;
 			goto done_section;
 		}
 		if (g_strcmp0(name, "timescale") == 0) {
 			if (parse_timescale(inc, contents) != SR_OK)
-				status = FALSE;
+				header_valid = FALSE;
 			goto done_section;
 		}
 		if (g_strcmp0(name, "scope") == 0) {
 			if (parse_scope(inc, contents, FALSE) != SR_OK)
-				status = FALSE;
+				header_valid = FALSE;
 			goto done_section;
 		}
 		if (g_strcmp0(name, "upscope") == 0) {
 			if (parse_scope(inc, NULL, TRUE) != SR_OK)
-				status = FALSE;
+				header_valid = FALSE;
 			goto done_section;
 		}
 		if (g_strcmp0(name, "var") == 0) {
 			if (parse_header_var(inc, contents) != SR_OK)
-				status = FALSE;
+				header_valid = FALSE;
 			goto done_section;
 		}
 
@@ -1225,14 +1222,14 @@ done_section:
 		g_free(contents);
 		contents = NULL;
 
-		if (status)
+		if (enddef_seen)
 			break;
 	}
 	g_free(name);
 	g_free(contents);
 
-	inc->got_header = status;
-	if (!status)
+	inc->got_header = enddef_seen && header_valid;
+	if (!inc->got_header)
 		return SR_ERR_DATA;
 
 	/* Create sigrok channels here, late, logic before analog. */
@@ -1510,6 +1507,95 @@ static uint8_t vcd_char_to_value(char bit_char, int *warn)
 	return ~0;
 }
 
+/*
+ * Check the validity of a VCD string value. It's essential to reliably
+ * accept valid data which the community uses in the field, yet robustly
+ * reject invalid data for users' awareness. Since IEEE 1800-2017 would
+ * not discuss the representation of this data type, it's assumed to not
+ * be an official feature of the VCD file format. This implementation is
+ * an educated guess after inspection of other arbitrary implementations,
+ * not backed by any specification or public documentation.
+ *
+ * A quick summary of the implemented assumptions: Must be a sequence of
+ * ASCII printables. Must not contain whitespace. Might contain escape
+ * sequences: A backslash followed by a single character, like '\n' or
+ * '\\'. Or a backslash and the letter x followed by two hex digits,
+ * like '\x20'. Or a backslash followed by three octal digits, like
+ * '\007'. As an exception also accepts a single digit '\0' but only at
+ * the text end. The string value may be empty, but must not be NULL.
+ *
+ * This implementation assumes an ASCII based platform for simplicity
+ * and readability. Should be a given on sigrok supported platforms.
+ */
+static gboolean vcd_string_valid(const char *s)
+{
+	char c;
+
+	if (!s)
+		return FALSE;
+
+	while (*s) {
+		c = *s++;
+		/* Reject non-printable ASCII chars including DEL. */
+		if (c < ' ')
+			return FALSE;
+		if (c > '~')
+			return FALSE;
+		/* Deeper inspection of escape sequences. */
+		if (c == '\\') {
+			c = *s++;
+			switch (c) {
+			case 'a': /* BEL, bell aka "alarm" */
+			case 'b': /* BS, back space */
+			case 't': /* TAB, tabulator */
+			case 'n': /* NL, newline */
+			case 'v': /* VT, vertical tabulator */
+			case 'f': /* FF, form feed */
+			case 'r': /* CR, carriage return */
+			case '"': /* double quotes */
+			case '\'': /* tick, single quote */
+			case '?': /* question mark */
+			case '\\': /* backslash */
+				continue;
+			case 'x': /* \xNN two hex digits */
+				c = *s++;
+				if (!g_ascii_isxdigit(c))
+					return FALSE;
+				c = *s++;
+				if (!g_ascii_isxdigit(c))
+					return FALSE;
+				continue;
+			case '0': /* \NNN three octal digits */
+			case '1':
+			case '2':
+			case '3':
+			case '4':
+			case '5':
+			case '6':
+			case '7':
+				/* Special case '\0' at end of text. */
+				if (c == '0' && !*s)
+					return TRUE;
+				/*
+				 * First digit was covered by the outer
+				 * switch(). Two more digits to check.
+				 */
+				c = *s++;
+				if (!g_ascii_isdigit(c) || c > '7')
+					return FALSE;
+				c = *s++;
+				if (!g_ascii_isdigit(c) || c > '7')
+					return FALSE;
+				continue;
+			default:
+				return FALSE;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
 /* Parse one text line of the data section. */
 static int parse_textline(const struct sr_input *in, char *lines)
 {
@@ -1518,7 +1604,8 @@ static int parse_textline(const struct sr_input *in, char *lines)
 	char **words;
 	size_t word_count, word_idx;
 	char *curr_word, *next_word, curr_first;
-	gboolean is_timestamp, is_section, is_real, is_multibit, is_singlebit;
+	gboolean is_timestamp, is_section;
+	gboolean is_real, is_multibit, is_singlebit, is_string;
 	uint64_t timestamp;
 	char *identifier, *endptr;
 	size_t count;
@@ -1697,6 +1784,7 @@ static int parse_textline(const struct sr_input *in, char *lines)
 		 * timestamp.
 		 *
 		 * Supported input data formats are:
+		 * - S<value> <sep> <id> (value not used, VCD type 'string').
 		 * - R<value> <sep> <id> (analog channel, VCD type 'real').
 		 * - B<value> <sep> <id> (analog channel, VCD type 'integer').
 		 * - B<value> <sep> <id> (logic channels, VCD bit vectors).
@@ -1725,6 +1813,7 @@ static int parse_textline(const struct sr_input *in, char *lines)
 		is_singlebit |= curr_first == 'l' || curr_first == 'h';
 		is_singlebit |= curr_first == 'x' || curr_first == 'z';
 		is_singlebit |= curr_first == 'u' || curr_first == '-';
+		is_string = curr_first == 's';
 		if (is_real) {
 			char *real_text;
 			float real_val;
@@ -1872,6 +1961,32 @@ static int parse_textline(const struct sr_input *in, char *lines)
 			process_bits(inc, identifier, inc->conv_bits.value, 1);
 			continue;
 		}
+		if (is_string) {
+			const char *str_value;
+
+			str_value = &curr_word[1];
+			identifier = next_word;
+			word_idx++;
+			if (!vcd_string_valid(str_value)) {
+				sr_err("Invalid string data: %s", str_value);
+				ret = SR_ERR_DATA;
+				break;
+			}
+			if (!identifier || !*identifier) {
+				sr_err("String value without identifier.");
+				ret = SR_ERR_DATA;
+				break;
+			}
+			sr_spew("Got string data, id '%s', value \"%s\".",
+				identifier, str_value);
+			if (!is_ignored(inc, identifier)) {
+				sr_err("String value for identifier '%s'.",
+					identifier);
+				ret = SR_ERR_DATA;
+				break;
+			}
+			continue;
+		}
 
 		/* Design choice: Consider unsupported input fatal. */
 		sr_err("Unknown token '%s'.", curr_word);
@@ -1893,6 +2008,9 @@ static int process_buffer(struct sr_input *in, gboolean is_eof)
 	size_t rdlen;
 
 	inc = in->priv;
+
+	if (!inc->got_header)
+		return SR_ERR_DATA;
 
 	/* Send feed header and samplerate (once) before sample data. */
 	if (!inc->started) {
@@ -2054,11 +2172,14 @@ static int end(struct sr_input *in)
 		ret = SR_OK;
 
 	/* Flush most recently queued sample data when EOF is seen. */
-	count = inc->data_after_timestamp ? 1 : 0;
-	add_samples(in, count, TRUE);
+	if (inc->got_header && ret == SR_OK) {
+		count = inc->data_after_timestamp ? 1 : 0;
+		add_samples(in, count, TRUE);
+	}
 
 	/* Optionally suggest downsampling after all input data was seen. */
-	(void)ts_stats_post(inc, !inc->data_after_timestamp);
+	if (inc->got_header)
+		(void)ts_stats_post(inc, !inc->data_after_timestamp);
 
 	/* Must send DF_END when DF_HEADER was sent before. */
 	if (inc->started)

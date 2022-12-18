@@ -379,8 +379,6 @@ static void set_analog_value(struct context *inc, size_t ch_idx, csv_analog_t va
 {
 	if (ch_idx >= inc->analog_channels)
 		return;
-	if (!value)
-		return;
 	inc->analog_sample_buffer[ch_idx * inc->analog_datafeed_buf_size] = value;
 }
 
@@ -657,10 +655,12 @@ static int make_column_details_from_format(const struct sr_input *in,
 			 * line won't get processed another time.
 			 */
 			column = column_texts[detail->col_nr - 1];
-			if (inc->use_header && column && *column)
+			if (inc->use_header && column && *column) {
+				column = g_strstrip(column);
 				caption = sr_scpi_unquote_string(column);
-			else
+			} else {
 				caption = NULL;
+			}
 			if (!caption || !*caption)
 				caption = NULL;
 			/*
@@ -1452,7 +1452,7 @@ static int initial_parse(const struct sr_input *in, GString *buf)
 		inc->analog_datafeed_buf_size /= sample_size;
 		inc->analog_datafeed_buf_size /= inc->analog_channels;
 		sample_count = inc->analog_channels * inc->analog_datafeed_buf_size;
-		inc->analog_datafeed_buffer = g_malloc0(sample_count * sample_size);
+		inc->analog_datafeed_buffer = g_malloc(sample_count * sample_size);
 		if (!inc->analog_datafeed_buffer) {
 			sr_err("Cannot allocate datafeed send buffer (analog).");
 			ret = SR_ERR_MALLOC;

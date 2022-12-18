@@ -31,39 +31,24 @@
 
 #define KAXXXXP_POLL_INTERVAL_MS 80
 
-enum {
-	VELLEMAN_PS3005D,
-	VELLEMAN_LABPS3005D,
-	KORAD_KA3005P,
-	KORAD_KA3005P_0X01,
-	KORAD_KA3005P_0XBC,
-	KORAD_KA3005P_V42,
-	KORAD_KA3005P_V55,
-	KORAD_KD3005P,
-	KORAD_KD3005P_V20_NOSP,
-	KORAD_KD3005P_V21_NOSP,
-	RND_320_KD3005P,
-	RND_320_KA3005P,
-	RND_320K30PV,
-	TENMA_72_2550_V2,
-	TENMA_72_2540_V20,
-	TENMA_72_2540_V21,
-	TENMA_72_2540_V52,
-	TENMA_72_2535_V21,
-	STAMOS_SLS31_V20,
-	KORAD_KD6005P,
-	/* Support for future devices with this protocol. */
+enum korad_quirks_flag {
+	KORAD_QUIRK_NONE = 0,
+	KORAD_QUIRK_LABPS_OVP_EN = 1UL << 0,
+	KORAD_QUIRK_ID_NO_VENDOR = 1UL << 1,
+	KORAD_QUIRK_ID_TRAILING = 1UL << 2,
+	KORAD_QUIRK_ID_OPT_VERSION = 1UL << 3,
+	KORAD_QUIRK_ALL = (1UL << 4) - 1,
 };
 
 /* Information on single model */
 struct korad_kaxxxxp_model {
-	int model_id; /**< Model info */
 	const char *vendor; /**< Vendor name */
 	const char *name; /**< Model name */
 	const char *id; /**< Model ID, as delivered by interface */
 	int channels; /**< Number of channels */
-	double voltage[3]; /**< Min, max, step */
-	double current[3]; /**< Min, max, step */
+	const double *voltage; /**< References: Min, max, step */
+	const double *current; /**< References: Min, max, step */
+	enum korad_quirks_flag quirks;
 };
 
 /* Reply targets */

@@ -435,6 +435,7 @@ SR_PRIV int lecroy_xstream_state_get(struct sr_dev_inst *sdi)
 		}
 		i++;
 	}
+	g_free(tmp_str);
 
 	if (!trig_source || scope_state_get_array_option(trig_source,
 			config->trigger_sources, config->num_trigger_sources,
@@ -448,6 +449,7 @@ SR_PRIV int lecroy_xstream_state_get(struct sr_dev_inst *sdi)
 	if (scope_state_get_array_option(tmp_str, config->trigger_slopes,
 			config->num_trigger_slopes, &state->trigger_slope) != SR_OK)
 		return SR_ERR;
+	g_free(tmp_str);
 
 	if (sr_scpi_get_float(sdi->conn, "TRIG_DELAY?", &state->horiz_triggerpos) != SR_OK)
 		return SR_ERR;
@@ -525,14 +527,9 @@ SR_PRIV int lecroy_xstream_init_device(struct sr_dev_inst *sdi)
 		ch = sr_channel_new(sdi, i, SR_CHANNEL_ANALOG, channel_enabled,
 			(*scope_models[model_index].analog_names)[i]);
 
-		devc->analog_groups[i] = g_malloc0(sizeof(struct sr_channel_group));
-
-		devc->analog_groups[i]->name = g_strdup(
-			(char *)(*scope_models[model_index].analog_names)[i]);
+		devc->analog_groups[i] = sr_channel_group_new(sdi,
+			(*scope_models[model_index].analog_names)[i], NULL);
 		devc->analog_groups[i]->channels = g_slist_append(NULL, ch);
-
-		sdi->channel_groups = g_slist_append(sdi->channel_groups,
-			devc->analog_groups[i]);
 	}
 
 	devc->model_config = &scope_models[model_index];
@@ -630,8 +627,6 @@ SR_PRIV int lecroy_xstream_receive_data(int fd, int revents, void *cb_data)
 	(void)fd;
 	(void)revents;
 
-	data = NULL;
-
 	if (!(sdi = cb_data))
 		return TRUE;
 
@@ -644,6 +639,7 @@ SR_PRIV int lecroy_xstream_receive_data(int fd, int revents, void *cb_data)
 	if (ch->type != SR_CHANNEL_ANALOG)
 		return SR_ERR;
 
+	data = NULL;
 	if (sr_scpi_get_block(sdi->conn, NULL, &data) != SR_OK) {
 		if (data)
 			g_byte_array_free(data, TRUE);
@@ -659,6 +655,7 @@ SR_PRIV int lecroy_xstream_receive_data(int fd, int revents, void *cb_data)
 
 	if (analog.num_samples == 0) {
 		g_free(analog.data);
+		g_byte_array_free(data, TRUE);
 
 		/* No data available, we have to acquire data first. */
 		g_snprintf(command, sizeof(command), "ARM;WAIT;*OPC;C%d:WAVEFORM?", ch->index + 1);
@@ -671,6 +668,7 @@ SR_PRIV int lecroy_xstream_receive_data(int fd, int revents, void *cb_data)
 		if (state->sample_rate == 0)
 			if (lecroy_xstream_update_sample_rate(sdi, analog.num_samples) != SR_OK) {
 				g_free(analog.data);
+				g_byte_array_free(data, TRUE);
 				return SR_ERR;
 			}
 	}

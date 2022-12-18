@@ -32,6 +32,9 @@
 #ifdef HAVE_LIBUSB_1_0
 #include <libusb.h>
 #endif
+#ifdef HAVE_LIBFTDI
+#include <ftdi.h>
+#endif
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -448,6 +451,19 @@ static inline void write_u16le(uint8_t *p, uint16_t x)
 #define WL16(p, x) write_u16le((uint8_t *)(p), (uint16_t)(x))
 
 /**
+ * Write a 24 bits unsigned integer to memory stored as little endian.
+ * @param p a pointer to the output memory
+ * @param x the input unsigned integer
+ */
+static inline void write_u24le(uint8_t *p, uint32_t x)
+{
+	p[0] = x & 0xff; x >>= 8;
+	p[1] = x & 0xff; x >>= 8;
+	p[2] = x & 0xff; x >>= 8;
+}
+#define WL24(p, x) write_u24le((uint8_t *)(p), (uint32_t)(x))
+
+/**
  * Write a 32 bits unsigned integer to memory stored as big endian.
  * @param p a pointer to the output memory
  * @param x the input unsigned integer
@@ -474,6 +490,21 @@ static inline void write_u32le(uint8_t *p, uint32_t x)
 	p[3] = x & 0xff; x >>= 8;
 }
 #define WL32(p, x) write_u32le((uint8_t *)(p), (uint32_t)(x))
+
+/**
+ * Write a 40 bits unsigned integer to memory stored as little endian.
+ * @param p a pointer to the output memory
+ * @param x the input unsigned integer
+ */
+static inline void write_u40le(uint8_t *p, uint64_t x)
+{
+	p[0] = x & 0xff; x >>= 8;
+	p[1] = x & 0xff; x >>= 8;
+	p[2] = x & 0xff; x >>= 8;
+	p[3] = x & 0xff; x >>= 8;
+	p[4] = x & 0xff; x >>= 8;
+}
+#define WL40(p, x) write_u40le((uint8_t *)(p), (uint64_t)(x))
 
 /**
  * Write a 48 bits unsigned integer to memory stored as little endian.
@@ -896,6 +927,19 @@ static inline void write_u16le_inc(uint8_t **p, uint16_t x)
 }
 
 /**
+ * Write unsigned 24bit liggle endian integer to raw memory, increment write position.
+ * @param[in, out] p Pointer into byte stream.
+ * @param[in] x Value to write.
+ */
+static inline void write_u24le_inc(uint8_t **p, uint32_t x)
+{
+	if (!p || !*p)
+		return;
+	write_u24le(*p, x);
+	*p += 3 * sizeof(uint8_t);
+}
+
+/**
  * Write unsigned 32bit big endian integer to raw memory, increment write position.
  * @param[in, out] p Pointer into byte stream.
  * @param[in] x Value to write.
@@ -919,6 +963,19 @@ static inline void write_u32le_inc(uint8_t **p, uint32_t x)
 		return;
 	write_u32le(*p, x);
 	*p += sizeof(x);
+}
+
+/**
+ * Write unsigned 40bit little endian integer to raw memory, increment write position.
+ * @param[in, out] p Pointer into byte stream.
+ * @param[in] x Value to write.
+ */
+static inline void write_u40le_inc(uint8_t **p, uint64_t x)
+{
+	if (!p || !*p)
+		return;
+	write_u40le(*p, x);
+	*p += 5 * sizeof(uint8_t);
 }
 
 /**
@@ -979,6 +1036,21 @@ static inline void write_dblle_inc(uint8_t **p, double x)
 #define libusb_has_capability(x) 0
 #define libusb_handle_events_timeout_completed(ctx, tv, c) \
 	libusb_handle_events_timeout(ctx, tv)
+#endif
+
+/*
+ * Convenience for FTDI library version dependency.
+ * - Version 1.5 introduced ftdi_tciflush(), ftdi_tcoflush(), and
+ *   ftdi_tcioflush() all within the same commit, and deprecated
+ *   ftdi_usb_purge_buffers() which suffered from inverse semantics.
+ *   The API is drop-in compatible (arguments count and data types are
+ *   identical). The libsigrok source code always flushes RX and TX at
+ *   the same time, never individually.
+ */
+#if defined HAVE_FTDI_TCIOFLUSH && HAVE_FTDI_TCIOFLUSH
+#  define PURGE_FTDI_BOTH ftdi_tcioflush
+#else
+#  define PURGE_FTDI_BOTH ftdi_usb_purge_buffers
 #endif
 
 /* Static definitions of structs ending with an all-zero entry are a
@@ -1573,6 +1645,11 @@ SR_PRIV struct sr_channel *sr_next_enabled_channel(const struct sr_dev_inst *sdi
 SR_PRIV gboolean sr_channels_differ(struct sr_channel *ch1, struct sr_channel *ch2);
 SR_PRIV gboolean sr_channel_lists_differ(GSList *l1, GSList *l2);
 
+SR_PRIV struct sr_channel_group *sr_channel_group_new(struct sr_dev_inst *sdi,
+	const char *name, void *priv);
+SR_PRIV void sr_channel_group_free(struct sr_channel_group *cg);
+SR_PRIV void sr_channel_group_free_cb(void *cg);
+
 /** Device instance data */
 struct sr_dev_inst {
 	/** Device driver. */
@@ -1611,6 +1688,7 @@ SR_PRIV void sr_dev_inst_free(struct sr_dev_inst *sdi);
 SR_PRIV struct sr_usb_dev_inst *sr_usb_dev_inst_new(uint8_t bus,
 		uint8_t address, struct libusb_device_handle *hdl);
 SR_PRIV void sr_usb_dev_inst_free(struct sr_usb_dev_inst *usb);
+SR_PRIV void sr_usb_dev_inst_free_cb(gpointer p); /* Glib wrapper. */
 #endif
 
 #ifdef HAVE_SERIAL_COMM
@@ -1916,8 +1994,6 @@ SR_PRIV int serial_stream_detect(struct sr_serial_dev_inst *serial,
 		size_t packet_size, packet_valid_callback is_valid,
 		packet_valid_len_callback is_valid_len, size_t *return_size,
 		uint64_t timeout_ms);
-SR_PRIV int sr_serial_extract_options(GSList *options, const char **serial_device,
-				      const char **serial_options);
 SR_PRIV int serial_source_add(struct sr_session *session,
 		struct sr_serial_dev_inst *serial, int events, int timeout,
 		sr_receive_data_callback cb, void *cb_data);
@@ -1996,6 +2072,9 @@ SR_PRIV const char *ser_hid_chip_find_name_vid_pid(uint16_t vid, uint16_t pid);
 #endif
 #endif
 
+SR_PRIV int sr_serial_extract_options(GSList *options,
+	const char **serial_device, const char **serial_options);
+
 /*--- bt/ API ---------------------------------------------------------------*/
 
 #ifdef HAVE_BLUETOOTH
@@ -2047,6 +2126,8 @@ SR_PRIV int ezusb_upload_firmware(struct sr_context *ctx, libusb_device *dev,
 
 /*--- usb.c -----------------------------------------------------------------*/
 
+SR_PRIV int sr_usb_split_conn(const char *conn,
+	uint16_t *vid, uint16_t *pid, uint8_t *bus, uint8_t *addr);
 #ifdef HAVE_LIBUSB_1_0
 SR_PRIV GSList *sr_usb_find(libusb_context *usb_ctx, const char *conn);
 SR_PRIV int sr_usb_open(libusb_context *usb_ctx, struct sr_usb_dev_inst *usb);
@@ -2063,7 +2144,9 @@ SR_PRIV gboolean usb_match_manuf_prod(libusb_device *dev,
 
 /** Binary value type */
 enum binary_value_type {
-	BVT_UINT8 = 0,
+	BVT_INVALID,
+
+	BVT_UINT8,
 	BVT_BE_UINT8 = BVT_UINT8,
 	BVT_LE_UINT8 = BVT_UINT8,
 
@@ -2671,6 +2754,9 @@ SR_PRIV int sr_sw_limits_config_set(struct sr_sw_limits *limits, uint32_t key,
 	GVariant *data);
 SR_PRIV void sr_sw_limits_acquisition_start(struct sr_sw_limits *limits);
 SR_PRIV gboolean sr_sw_limits_check(struct sr_sw_limits *limits);
+SR_PRIV int sr_sw_limits_get_remain(const struct sr_sw_limits *limits,
+	uint64_t *samples, uint64_t *frames, uint64_t *msecs,
+	gboolean *exceeded);
 SR_PRIV void sr_sw_limits_update_samples_read(struct sr_sw_limits *limits,
 	uint64_t samples_read);
 SR_PRIV void sr_sw_limits_update_frames_read(struct sr_sw_limits *limits,
@@ -2683,15 +2769,16 @@ struct feed_queue_logic;
 struct feed_queue_analog;
 
 SR_API struct feed_queue_logic *feed_queue_logic_alloc(
-	struct sr_dev_inst *sdi,
+	const struct sr_dev_inst *sdi,
 	size_t sample_count, size_t unit_size);
 SR_API int feed_queue_logic_submit(struct feed_queue_logic *q,
 	const uint8_t *data, size_t count);
 SR_API int feed_queue_logic_flush(struct feed_queue_logic *q);
+SR_API int feed_queue_logic_send_trigger(struct feed_queue_logic *q);
 SR_API void feed_queue_logic_free(struct feed_queue_logic *q);
 
 SR_API struct feed_queue_analog *feed_queue_analog_alloc(
-	struct sr_dev_inst *sdi,
+	const struct sr_dev_inst *sdi,
 	size_t sample_count, int digits, struct sr_channel *ch);
 SR_API int feed_queue_analog_submit(struct feed_queue_analog *q,
 	float data, size_t count);

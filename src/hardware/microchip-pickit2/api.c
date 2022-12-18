@@ -159,9 +159,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		sdi->connection_id = g_strdup(conn);
 
 		/* Create the logic channels group. */
-		cg = g_malloc0(sizeof(*cg));
-		sdi->channel_groups = g_slist_append(NULL, cg);
-		cg->name = g_strdup("Logic");
+		cg = sr_channel_group_new(sdi, "Logic", NULL);
 		ch_count = ARRAY_SIZE(channel_names);
 		for (ch_idx = 0; ch_idx < ch_count; ch_idx++) {
 			ch = sr_channel_new(sdi, ch_idx, SR_CHANNEL_LOGIC,
@@ -269,21 +267,27 @@ static int config_get(uint32_t key, GVariant **data,
 	(void)cg;
 
 	devc = sdi ? sdi->priv : NULL;
+	usb = sdi ? sdi->conn : NULL;
 
 	switch (key) {
 	case SR_CONF_CONN:
-		if (!sdi->conn)
+		if (!usb)
 			return SR_ERR_ARG;
-		usb = sdi->conn;
 		*data = g_variant_new_printf("%d.%d", usb->bus, usb->address);
 		return SR_OK;
 	case SR_CONF_SAMPLERATE:
+		if (!devc)
+			return SR_ERR_ARG;
 		rate = devc->samplerates[devc->curr_samplerate_idx];
 		*data = g_variant_new_uint64(rate);
 		return SR_OK;
 	case SR_CONF_LIMIT_SAMPLES:
+		if (!devc)
+			return SR_ERR_ARG;
 		return sr_sw_limits_config_get(&devc->sw_limits, key, data);
 	case SR_CONF_CAPTURE_RATIO:
+		if (!devc)
+			return SR_ERR_ARG;
 		ratio = devc->captureratios[devc->curr_captureratio_idx];
 		*data = g_variant_new_uint64(ratio);
 		return SR_OK;
